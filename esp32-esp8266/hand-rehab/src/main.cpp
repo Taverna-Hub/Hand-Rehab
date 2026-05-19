@@ -1,4 +1,11 @@
 #include <Arduino.h>
+#include "HX711.h"
+
+// Configuração inicial do sensor de pressão
+const int DOUT_PIN = 3; 
+const int SCK_PIN = 4;  
+
+HX711 sensor;
 
 // put function declarations here:
 int myFunction(int, int);
