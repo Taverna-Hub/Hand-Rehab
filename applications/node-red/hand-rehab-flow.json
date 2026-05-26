@@ -4,7 +4,7 @@
     "type": "tab",
     "label": "ESP32 Hand Rehab",
     "disabled": false,
-    "info": "Configuracao esperada via variaveis de ambiente:\n\nMQTT_BROKER=192.168.0.10\nNODE_RED_MQTT_BROKER=127.0.0.1\nMQTT_PORT=1883\nNODE_RED_CLIENT_ID=node-red-hand-rehab\n\nComo usar:\n1. Configure o arquivo .env na raiz do repositorio.\n2. Inicie o Node-RED com essas variaveis carregadas.\n3. Importe este fluxo.\n4. Confira o no Broker MQTT Local.\n5. Clique em Deploy.\n\nTopicos:\n- hand-rehab/esp32/status\n- hand-rehab/esp32/mode/set\n- hand-rehab/esp32/mode/state\n- hand-rehab/esp32/buttons\n- hand-rehab/esp32/pressure"
+    "info": "Configuracao esperada via variaveis de ambiente:\n\nMQTT_BROKER=192.168.0.10\nNODE_RED_MQTT_BROKER=127.0.0.1\nMQTT_PORT=1883\nNODE_RED_CLIENT_ID=node-red-hand-rehab\n\nComo usar:\n1. Configure o arquivo .env na raiz do repositorio.\n2. Inicie o Node-RED com essas variaveis carregadas.\n3. Importe este fluxo.\n4. Confira o no Broker MQTT Local.\n5. Clique em Deploy.\n\nTopicos:\n- hand-rehab/esp32/status\n- hand-rehab/esp32/mode/set\n- hand-rehab/esp32/mode/state\n- hand-rehab/esp32/buttons\n- hand-rehab/esp32/pressure\n\nPayload de pressao esperado:\n{\"pressure\":0.123,\"pressure_kpa\":0.123,\"pressure_mmhg\":0.92,\"raw\":12345,\"net\":1234,\"timeouts\":0,\"mode\":2}"
   },
   {
     "id": "b7cb4d8e7e6a1002",
@@ -94,7 +94,7 @@
     "inputs": 0,
     "x": 150,
     "y": 280,
-    "wires": [["b7cb4d8e7e6a1011"]]
+    "wires": [["b7cb4d8e7e6a1015"]]
   },
   {
     "id": "b7cb4d8e7e6a1007",
@@ -110,8 +110,8 @@
     "correl": "",
     "expiry": "",
     "broker": "b7cb4d8e7e6a1002",
-    "x": 560,
-    "y": 420,
+    "x": 570,
+    "y": 580,
     "wires": []
   },
   {
@@ -169,7 +169,7 @@
     "id": "b7cb4d8e7e6a1011",
     "type": "debug",
     "z": "b7cb4d8e7e6a1001",
-    "name": "debug pressao",
+    "name": "debug pressao completa",
     "active": true,
     "tosidebar": true,
     "console": false,
@@ -178,8 +178,79 @@
     "targetType": "msg",
     "statusVal": "",
     "statusType": "auto",
-    "x": 410,
+    "x": 680,
     "y": 280,
+    "wires": []
+  },
+  {
+    "id": "b7cb4d8e7e6a1015",
+    "type": "function",
+    "z": "b7cb4d8e7e6a1001",
+    "name": "Normalizar pressao HX710B",
+    "func": "let data = msg.payload;\n\nif (typeof data === \"string\") {\n    try {\n        data = JSON.parse(data);\n    } catch (error) {\n        msg.payload = {\n            error: \"invalid_pressure_json\",\n            raw_payload: data\n        };\n        return [msg, null, null, null];\n    }\n}\n\nif (!data || typeof data !== \"object\") {\n    msg.payload = {\n        error: \"invalid_pressure_payload\",\n        raw_payload: data\n    };\n    return [msg, null, null, null];\n}\n\nif (data.error) {\n    const errorMsg = {\n        payload: {\n            error: data.error,\n            timeouts: Number(data.timeouts || 0),\n            mode: Number(data.mode || 2)\n        },\n        topic: msg.topic\n    };\n    return [errorMsg, null, null, errorMsg];\n}\n\nconst pressureKpa = Number(data.pressure_kpa ?? data.pressure ?? 0);\nconst pressureMmhg = Number(data.pressure_mmhg ?? pressureKpa * 7.50062);\nconst raw = Number(data.raw ?? 0);\nconst net = Number(data.net ?? 0);\nconst timeouts = Number(data.timeouts ?? 0);\nconst mode = Number(data.mode ?? 2);\n\nconst normalized = {\n    pressure: pressureKpa,\n    pressure_kpa: pressureKpa,\n    pressure_mmhg: pressureMmhg,\n    raw,\n    net,\n    timeouts,\n    mode\n};\n\nreturn [\n    { payload: normalized, topic: msg.topic },\n    { payload: pressureKpa, topic: \"hand-rehab/esp32/pressure/kpa\" },\n    { payload: pressureMmhg, topic: \"hand-rehab/esp32/pressure/mmhg\" },\n    { payload: { raw, net, timeouts }, topic: \"hand-rehab/esp32/pressure/raw\" }\n];",
+    "outputs": 4,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 400,
+    "y": 280,
+    "wires": [
+      ["b7cb4d8e7e6a1011"],
+      ["b7cb4d8e7e6a1016"],
+      ["b7cb4d8e7e6a1017"],
+      ["b7cb4d8e7e6a1018"]
+    ]
+  },
+  {
+    "id": "b7cb4d8e7e6a1016",
+    "type": "debug",
+    "z": "b7cb4d8e7e6a1001",
+    "name": "debug pressao kPa",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 670,
+    "y": 340,
+    "wires": []
+  },
+  {
+    "id": "b7cb4d8e7e6a1017",
+    "type": "debug",
+    "z": "b7cb4d8e7e6a1001",
+    "name": "debug pressao mmHg",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 680,
+    "y": 400,
+    "wires": []
+  },
+  {
+    "id": "b7cb4d8e7e6a1018",
+    "type": "debug",
+    "z": "b7cb4d8e7e6a1001",
+    "name": "debug raw net timeouts",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 690,
+    "y": 460,
     "wires": []
   },
   {
@@ -196,7 +267,7 @@
     "payload": "1",
     "payloadType": "str",
     "x": 190,
-    "y": 400,
+    "y": 560,
     "wires": [["b7cb4d8e7e6a1007"]]
   },
   {
@@ -213,7 +284,7 @@
     "payload": "2",
     "payloadType": "str",
     "x": 190,
-    "y": 460,
+    "y": 620,
     "wires": [["b7cb4d8e7e6a1007"]]
   },
   {

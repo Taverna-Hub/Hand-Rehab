@@ -11,12 +11,12 @@ KiCad ou outra ferramenta de prototipação).
 
 O firmware principal está em `esp32-esp8266/hand-rehab`. Ele usa PlatformIO com
 Arduino ESP32, FreeRTOS, interrupções nos botões, MQTT para comunicação com o
-Node-RED e HX711 para leitura do sensor de pressão MPS20N0040D.
+Node-RED e HX710B para leitura do sensor de pressão MPS20N0040D.
 
 ### Funções
 
 - **Modo 1:** lê quatro botões por interrupção e publica os eventos no MQTT.
-- **Modo 2:** lê o sensor de pressão barométrico MPS20N0040D pelo HX711 e publica
+- **Modo 2:** lê o sensor de pressão barométrico MPS20N0040D pelo HX710B e publica
   amostras periódicas no MQTT.
 
 ### Pinos configurados
@@ -25,8 +25,8 @@ Node-RED e HX711 para leitura do sensor de pressão MPS20N0040D.
 - Botão 2: GPIO 19
 - Botão 3: GPIO 21
 - Botão 4: GPIO 22
-- HX711 DOUT: GPIO 32
-- HX711 SCK: GPIO 33
+- HX710B OUT: GPIO 32
+- HX710B SCK: GPIO 33
 
 Os botões foram configurados com `INPUT_PULLUP`, então devem fechar contato com
 GND quando pressionados. Ajuste os pinos em `src/main.cpp` se o circuito usar
@@ -71,7 +71,7 @@ disso, o processamento fica dividido em tarefas:
   `mqttClient.loop()`.
 - `taskButtons`: recebe eventos vindos das interrupções dos botões por uma fila
   FreeRTOS e publica no MQTT quando o modo 1 está ativo.
-- `taskPressure`: lê o MPS20N0040D pelo HX711 em intervalo fixo e publica no MQTT
+- `taskPressure`: lê o MPS20N0040D pelo HX710B em intervalo fixo e publica no MQTT
   quando o modo 2 está ativo.
 
 As interrupções dos botões não publicam MQTT diretamente. Elas apenas colocam um
@@ -116,7 +116,15 @@ Quando o ESP32 conectar, o Node-RED deve receber:
 - JSON dos botões em `hand-rehab/esp32/buttons`, por exemplo
   `{"button":1,"pin":18,"pressed":1,"mode":1}`;
 - JSON da pressão em `hand-rehab/esp32/pressure`, por exemplo
-  `{"pressure":123.456,"mode":2}`.
+  `{"pressure":0.123,"pressure_kpa":0.123,"pressure_mmhg":0.92,"raw":12345,"net":1234,"timeouts":0,"mode":2}`.
+
+No fluxo importado, a mensagem de pressão passa pelo nó
+**Normalizar pressao HX710B** e sai separada nos debugs:
+
+- **debug pressao completa**: objeto normalizado completo.
+- **debug pressao kPa**: valor numérico em kPa.
+- **debug pressao mmHg**: valor numérico em mmHg.
+- **debug raw net timeouts**: valores brutos para calibração e diagnóstico.
 
 No fluxo importado, use os nós de injeção:
 

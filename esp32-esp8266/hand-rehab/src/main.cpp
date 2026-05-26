@@ -1,7 +1,7 @@
 #include <Arduino.h>
 #include <WiFi.h>
 #include <PubSubClient.h>
-#include "HX711.h"
+#include <limits.h>
 
 #ifndef WIFI_SSID
 #error "WIFI_SSID nao definido. Configure a variavel no arquivo .env."
@@ -35,7 +35,7 @@ static const char *TOPIC_MODE_STATE = "hand-rehab/esp32/mode/state";
 static const char *TOPIC_BUTTONS = "hand-rehab/esp32/buttons";
 static const char *TOPIC_PRESSURE = "hand-rehab/esp32/pressure";
 
-// Modo 1: botoes. Modo 2: sensor de pressao MPS20N0040D com HX711.
+// Modo 1: botoes. Modo 2: sensor de pressao MPS20N0040D com HX710B.
 enum OperationMode : uint8_t {
   MODE_BUTTONS = 1,
   MODE_PRESSURE = 2,
@@ -46,8 +46,8 @@ static volatile OperationMode currentMode = MODE_BUTTONS;
 // Pinos sugeridos para ESP32 DevKit. Evite GPIOs de boot ao adaptar o hardware.
 static const uint8_t BUTTON_PINS[] = {18, 19, 21, 22};
 static const uint8_t BUTTON_COUNT = sizeof(BUTTON_PINS) / sizeof(BUTTON_PINS[0]);
-static const uint8_t HX711_DOUT_PIN = 32;
-static const uint8_t HX711_SCK_PIN = 33;
+static const uint8_t HX710B_OUT_PIN = 32;
+static const uint8_t HX710B_SCK_PIN = 33;
 
 static const uint32_t BUTTON_DEBOUNCE_MS = 50;
 static const uint32_t PRESSURE_SAMPLE_INTERVAL_MS = 500;
@@ -60,9 +60,14 @@ static const UBaseType_t MQTT_TASK_PRIORITY = 3;
 static const UBaseType_t BUTTON_TASK_PRIORITY = 2;
 static const UBaseType_t PRESSURE_TASK_PRIORITY = 1;
 
-// Calibracao inicial. Substitua pelos valores obtidos no seu prototipo.
-static const float HX711_SCALE = 2280.0f;
-static const long HX711_OFFSET = 0;
+// HX710B: 27 pulsos selecionam entrada diferencial em 40 Hz.
+static const uint8_t PRESSURE_SAMPLE_COUNT = 3;
+static const uint8_t HX710B_TOTAL_CLOCK_PULSES = 27;
+static const uint32_t HX710B_READY_TIMEOUT_MS = 250;
+
+// Calibracao inicial. Substitua pelo fator obtido com uma pressao conhecida.
+static const float RAW_COUNTS_PER_KPA = 10000.0f;
+static const float KPA_TO_MMHG = 7.50062f;
 
 struct ButtonEvent {
   uint8_t index;
@@ -74,15 +79,23 @@ static QueueHandle_t buttonQueue;
 static SemaphoreHandle_t mqttMutex;
 static WiFiClient wifiClient;
 static PubSubClient mqttClient(wifiClient);
-static HX711 pressureSensor;
+static long pressureZeroOffset = 0;
+static uint32_t pressureTimeoutCount = 0;
 
 static void setupHardware();
 static void setupFreeRtos();
+static void setupPressureSensor();
+static bool waitForHx710b(uint32_t timeoutMs);
+static void resetHx710b();
+static long readHx710bRaw();
+static long readHx710bAverage(uint8_t sampleCount);
+static bool tarePressureSensor();
 static void connectWiFi();
 static void connectMqtt();
 static void publishMode();
 static void publishButtonState(const ButtonEvent &event);
-static void publishPressure(float rawUnits);
+static void publishPressure(long raw, long netRaw, float pressureKpa, float pressureMmhg);
+static void publishPressureTimeout();
 static void mqttCallback(char *topic, byte *payload, unsigned int length);
 static void taskMqtt(void *parameter);
 static void taskButtons(void *parameter);
@@ -132,9 +145,104 @@ static void setupHardware() {
     pinMode(BUTTON_PINS[i], INPUT_PULLUP);
   }
 
-  pressureSensor.begin(HX711_DOUT_PIN, HX711_SCK_PIN);
-  pressureSensor.set_scale(HX711_SCALE);
-  pressureSensor.set_offset(HX711_OFFSET);
+  setupPressureSensor();
+}
+
+static void setupPressureSensor() {
+  pinMode(HX710B_SCK_PIN, OUTPUT);
+  digitalWrite(HX710B_SCK_PIN, LOW);
+  pinMode(HX710B_OUT_PIN, INPUT);
+
+  Serial.printf("HX710B OUT: GPIO %u | SCK: GPIO %u\n", HX710B_OUT_PIN, HX710B_SCK_PIN);
+  resetHx710b();
+
+  if (!waitForHx710b(5000)) {
+    Serial.println("HX710B nao ficou pronto no boot. Leituras tentarao recuperar no loop.");
+    return;
+  }
+
+  tarePressureSensor();
+}
+
+static bool waitForHx710b(uint32_t timeoutMs) {
+  const uint32_t startedAt = millis();
+
+  while (digitalRead(HX710B_OUT_PIN) == HIGH) {
+    if (millis() - startedAt >= timeoutMs) {
+      return false;
+    }
+    delay(1);
+  }
+
+  return true;
+}
+
+static void resetHx710b() {
+  digitalWrite(HX710B_SCK_PIN, HIGH);
+  delayMicroseconds(80);
+  digitalWrite(HX710B_SCK_PIN, LOW);
+  delay(120);
+}
+
+static long readHx710bRaw() {
+  uint32_t value = 0;
+
+  if (!waitForHx710b(HX710B_READY_TIMEOUT_MS)) {
+    return LONG_MIN;
+  }
+
+  noInterrupts();
+  for (uint8_t i = 0; i < 24; i++) {
+    digitalWrite(HX710B_SCK_PIN, HIGH);
+    delayMicroseconds(1);
+    value = (value << 1) | digitalRead(HX710B_OUT_PIN);
+    digitalWrite(HX710B_SCK_PIN, LOW);
+    delayMicroseconds(1);
+  }
+
+  for (uint8_t i = 24; i < HX710B_TOTAL_CLOCK_PULSES; i++) {
+    digitalWrite(HX710B_SCK_PIN, HIGH);
+    delayMicroseconds(1);
+    digitalWrite(HX710B_SCK_PIN, LOW);
+    delayMicroseconds(1);
+  }
+  interrupts();
+
+  if (value & 0x800000UL) {
+    value |= 0xFF000000UL;
+  }
+
+  return static_cast<int32_t>(value);
+}
+
+static long readHx710bAverage(uint8_t sampleCount) {
+  int64_t sum = 0;
+
+  for (uint8_t i = 0; i < sampleCount; i++) {
+    const long raw = readHx710bRaw();
+    if (raw == LONG_MIN) {
+      return LONG_MIN;
+    }
+    sum += raw;
+  }
+
+  return static_cast<long>(sum / sampleCount);
+}
+
+static bool tarePressureSensor() {
+  Serial.println("Fazendo tara do HX710B. Deixe o sensor sem pressao aplicada.");
+
+  const long offset = readHx710bAverage(20);
+  if (offset == LONG_MIN) {
+    Serial.println("Falha na tara do HX710B. Usando offset zero.");
+    pressureZeroOffset = 0;
+    return false;
+  }
+
+  pressureZeroOffset = offset;
+  Serial.print("Offset zero HX710B: ");
+  Serial.println(pressureZeroOffset);
+  return true;
 }
 
 static void setupFreeRtos() {
@@ -230,11 +338,29 @@ static void publishButtonState(const ButtonEvent &event) {
   }
 }
 
-static void publishPressure(float pressureUnits) {
+static void publishPressure(long raw, long netRaw, float pressureKpa, float pressureMmhg) {
+  char payload[192];
+  snprintf(payload, sizeof(payload),
+           "{\"pressure\":%.3f,\"pressure_kpa\":%.3f,\"pressure_mmhg\":%.2f,"
+           "\"raw\":%ld,\"net\":%ld,\"timeouts\":%lu,\"mode\":2}",
+           pressureKpa,
+           pressureKpa,
+           pressureMmhg,
+           raw,
+           netRaw,
+           static_cast<unsigned long>(pressureTimeoutCount));
+
+  if (xSemaphoreTakeRecursive(mqttMutex, pdMS_TO_TICKS(250)) == pdTRUE) {
+    mqttClient.publish(TOPIC_PRESSURE, payload);
+    xSemaphoreGiveRecursive(mqttMutex);
+  }
+}
+
+static void publishPressureTimeout() {
   char payload[96];
   snprintf(payload, sizeof(payload),
-           "{\"pressure\":%.3f,\"mode\":2}",
-           pressureUnits);
+           "{\"error\":\"hx710b_timeout\",\"timeouts\":%lu,\"mode\":2}",
+           static_cast<unsigned long>(pressureTimeoutCount));
 
   if (xSemaphoreTakeRecursive(mqttMutex, pdMS_TO_TICKS(250)) == pdTRUE) {
     mqttClient.publish(TOPIC_PRESSURE, payload);
@@ -291,8 +417,24 @@ static void taskPressure(void *parameter) {
   (void)parameter;
 
   for (;;) {
-    if (currentMode == MODE_PRESSURE && pressureSensor.is_ready()) {
-      publishPressure(pressureSensor.get_units(5));
+    if (currentMode == MODE_PRESSURE) {
+      const long raw = readHx710bAverage(PRESSURE_SAMPLE_COUNT);
+
+      if (raw == LONG_MIN) {
+        pressureTimeoutCount++;
+        Serial.print("HX710B timeout. OUT=");
+        Serial.print(digitalRead(HX710B_OUT_PIN));
+        Serial.print(" timeouts=");
+        Serial.println(pressureTimeoutCount);
+        resetHx710b();
+        publishPressureTimeout();
+      } else {
+        pressureTimeoutCount = 0;
+        const long netRaw = raw - pressureZeroOffset;
+        const float pressureKpa = netRaw / RAW_COUNTS_PER_KPA;
+        const float pressureMmhg = pressureKpa * KPA_TO_MMHG;
+        publishPressure(raw, netRaw, pressureKpa, pressureMmhg);
+      }
     }
 
     vTaskDelay(pdMS_TO_TICKS(PRESSURE_SAMPLE_INTERVAL_MS));
