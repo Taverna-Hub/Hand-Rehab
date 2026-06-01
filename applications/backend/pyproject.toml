@@ -1,0 +1,36 @@
+[project]
+name = "hand-rehab-backend"
+version = "0.1.0"
+description = "FastAPI backend for the Hand Rehab MVP"
+requires-python = ">=3.12"
+dependencies = [
+  "alembic>=1.13.3",
+  "asyncpg>=0.30.0",
+  "fastapi>=0.115.0",
+  "greenlet>=3.1.1",
+  "paho-mqtt>=2.1.0",
+  "pydantic>=2.9.2",
+  "pydantic-settings>=2.6.1",
+  "sqlalchemy[asyncio]>=2.0.35",
+  "uvicorn[standard]>=0.32.0"
+]
+
+[project.optional-dependencies]
+test = [
+  "aiosqlite>=0.20.0",
+  "httpx>=0.27.2",
+  "pytest>=8.3.3",
+  "pytest-asyncio>=0.24.0"
+]
+
+[build-system]
+requires = ["setuptools>=75.0.0"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["app*"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

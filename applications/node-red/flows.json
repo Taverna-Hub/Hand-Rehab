@@ -1,0 +1,478 @@
+[
+  {
+    "id": "handrehab-flow",
+    "type": "tab",
+    "label": "Hand Rehab MVP",
+    "disabled": false,
+    "info": "Fluxo oficial do MVP: MQTT realtime para WebSocket e batches para backend."
+  },
+  {
+    "id": "aedes-broker",
+    "type": "aedes broker",
+    "z": "handrehab-flow",
+    "name": "Aedes MQTT Broker",
+    "mqtt_port": "1883",
+    "mqtt_ws_bind": "port",
+    "mqtt_ws_port": "",
+    "mqtt_ws_path": "",
+    "cert": "",
+    "key": "",
+    "certname": "",
+    "keyname": "",
+    "dburl": "",
+    "usetls": false,
+    "x": 170,
+    "y": 80,
+    "wires": [
+      [
+        "debug-aedes-events"
+      ],
+      [
+        "debug-aedes-publish"
+      ]
+    ]
+  },
+  {
+    "id": "debug-aedes-events",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug aedes events",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 430,
+    "y": 60,
+    "wires": []
+  },
+  {
+    "id": "debug-aedes-publish",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug aedes publish",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 440,
+    "y": 100,
+    "wires": []
+  },
+  {
+    "id": "mqtt-local",
+    "type": "mqtt-broker",
+    "name": "Aedes local",
+    "broker": "127.0.0.1",
+    "port": "1883",
+    "clientid": "${NODE_RED_CLIENT_ID}",
+    "autoConnect": true,
+    "usetls": false,
+    "protocolVersion": "4",
+    "keepalive": "60",
+    "cleansession": true,
+    "birthTopic": "",
+    "birthQos": "0",
+    "birthPayload": "",
+    "birthMsg": {},
+    "closeTopic": "",
+    "closeQos": "0",
+    "closePayload": "",
+    "closeMsg": {},
+    "willTopic": "",
+    "willQos": "0",
+    "willPayload": "",
+    "willMsg": {},
+    "sessionExpiry": ""
+  },
+  {
+    "id": "ws-realtime-listener",
+    "type": "websocket-listener",
+    "path": "/ws/realtime",
+    "wholemsg": "false"
+  },
+  {
+    "id": "mqtt-realtime-buttons",
+    "type": "mqtt in",
+    "z": "handrehab-flow",
+    "name": "realtime buttons",
+    "topic": "rehab/devices/+/realtime/buttons",
+    "qos": "0",
+    "datatype": "auto",
+    "broker": "mqtt-local",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 180,
+    "wires": [
+      [
+        "fn-normalize-realtime-button"
+      ]
+    ]
+  },
+  {
+    "id": "fn-normalize-realtime-button",
+    "type": "function",
+    "z": "handrehab-flow",
+    "name": "normalize_realtime_button",
+    "func": "let data = msg.payload;\nconst sourceTopic = msg.topic;\nif (Buffer.isBuffer(data)) data = data.toString();\nif (typeof data === 'string') {\n    try { data = JSON.parse(data); } catch (error) {\n        return [null, { payload: { error: 'invalid_json', source_topic: sourceTopic, raw_payload: data } }];\n    }\n}\nif (!data || typeof data !== 'object') {\n    return [null, { payload: { error: 'invalid_payload', source_topic: sourceTopic, raw_payload: data } }];\n}\nconst required = ['device_id', 'session_id', 'user_id', 'hand', 'mode', 'button_id', 'event_type', 'timestamp_ms'];\nconst missing = required.filter((key) => data[key] === undefined || data[key] === null);\nif (missing.length) {\n    return [null, { payload: { error: 'missing_fields', missing, source_topic: sourceTopic, raw_payload: data } }];\n}\nmsg.payload = { ...data, source_topic: sourceTopic, realtime_type: 'buttons' };\nreturn [msg, null];",
+    "outputs": 2,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 180,
+    "wires": [
+      [
+        "ws-realtime-out",
+        "debug-realtime-buttons"
+      ],
+      [
+        "debug-invalid-payload"
+      ]
+    ]
+  },
+  {
+    "id": "debug-realtime-buttons",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug realtime buttons",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 740,
+    "y": 160,
+    "wires": []
+  },
+  {
+    "id": "mqtt-realtime-pressure",
+    "type": "mqtt in",
+    "z": "handrehab-flow",
+    "name": "realtime pressure",
+    "topic": "rehab/devices/+/realtime/pressure",
+    "qos": "0",
+    "datatype": "auto",
+    "broker": "mqtt-local",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 260,
+    "wires": [
+      [
+        "fn-normalize-realtime-pressure"
+      ]
+    ]
+  },
+  {
+    "id": "fn-normalize-realtime-pressure",
+    "type": "function",
+    "z": "handrehab-flow",
+    "name": "normalize_realtime_pressure",
+    "func": "let data = msg.payload;\nconst sourceTopic = msg.topic;\nif (Buffer.isBuffer(data)) data = data.toString();\nif (typeof data === 'string') {\n    try { data = JSON.parse(data); } catch (error) {\n        return [null, { payload: { error: 'invalid_json', source_topic: sourceTopic, raw_payload: data } }];\n    }\n}\nif (!data || typeof data !== 'object') {\n    return [null, { payload: { error: 'invalid_payload', source_topic: sourceTopic, raw_payload: data } }];\n}\nconst required = ['device_id', 'session_id', 'user_id', 'hand', 'mode', 'pressure_raw', 'timestamp_ms'];\nconst missing = required.filter((key) => data[key] === undefined || data[key] === null);\nif (missing.length) {\n    return [null, { payload: { error: 'missing_fields', missing, source_topic: sourceTopic, raw_payload: data } }];\n}\nmsg.payload = { ...data, source_topic: sourceTopic, realtime_type: 'pressure' };\nreturn [msg, null];",
+    "outputs": 2,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 440,
+    "y": 260,
+    "wires": [
+      [
+        "ws-realtime-out",
+        "debug-realtime-pressure"
+      ],
+      [
+        "debug-invalid-payload"
+      ]
+    ]
+  },
+  {
+    "id": "debug-realtime-pressure",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug realtime pressure",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 750,
+    "y": 240,
+    "wires": []
+  },
+  {
+    "id": "mqtt-realtime-session",
+    "type": "mqtt in",
+    "z": "handrehab-flow",
+    "name": "realtime session",
+    "topic": "rehab/devices/+/realtime/session",
+    "qos": "0",
+    "datatype": "auto",
+    "broker": "mqtt-local",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 320,
+    "wires": [
+      [
+        "fn-normalize-realtime-session"
+      ]
+    ]
+  },
+  {
+    "id": "fn-normalize-realtime-session",
+    "type": "function",
+    "z": "handrehab-flow",
+    "name": "normalize_realtime_session",
+    "func": "let data = msg.payload;\nconst sourceTopic = msg.topic;\nif (Buffer.isBuffer(data)) data = data.toString();\nif (typeof data === 'string') {\n    try { data = JSON.parse(data); } catch (error) {\n        return [null, { payload: { error: 'invalid_json', source_topic: sourceTopic, raw_payload: data } }];\n    }\n}\nif (!data || typeof data !== 'object') {\n    return [null, { payload: { error: 'invalid_payload', source_topic: sourceTopic, raw_payload: data } }];\n}\nconst baseRequired = ['device_id', 'timestamp_ms'];\nconst missingBase = baseRequired.filter((key) => data[key] === undefined || data[key] === null);\nif (missingBase.length) {\n    return [null, { payload: { error: 'missing_fields', missing: missingBase, source_topic: sourceTopic, raw_payload: data } }];\n}\nif (!data.event_type && !data.status) {\n    return [null, { payload: { error: 'missing_event_or_status', source_topic: sourceTopic, raw_payload: data } }];\n}\nif (data.event_type) {\n    const required = ['session_id', 'user_id', 'hand', 'mode'];\n    const missing = required.filter((key) => data[key] === undefined || data[key] === null || data[key] === '');\n    if (missing.length) {\n        return [null, { payload: { error: 'missing_fields', missing, source_topic: sourceTopic, raw_payload: data } }];\n    }\n}\nmsg.payload = { ...data, source_topic: sourceTopic, realtime_type: 'session' };\nreturn [msg, null];",
+    "outputs": 2,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 440,
+    "y": 320,
+    "wires": [
+      [
+        "ws-realtime-out",
+        "debug-realtime-session"
+      ],
+      [
+        "debug-invalid-payload"
+      ]
+    ]
+  },
+  {
+    "id": "debug-realtime-session",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug realtime session",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 750,
+    "y": 320,
+    "wires": []
+  },
+  {
+    "id": "ws-realtime-out",
+    "type": "websocket out",
+    "z": "handrehab-flow",
+    "name": "frontend realtime websocket",
+    "server": "ws-realtime-listener",
+    "client": "",
+    "x": 770,
+    "y": 210,
+    "wires": []
+  },
+  {
+    "id": "mqtt-batch-buttons",
+    "type": "mqtt in",
+    "z": "handrehab-flow",
+    "name": "batch buttons",
+    "topic": "rehab/devices/+/batch/buttons",
+    "qos": "0",
+    "datatype": "auto",
+    "broker": "mqtt-local",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 150,
+    "y": 380,
+    "wires": [
+      [
+        "fn-normalize-button-batch"
+      ]
+    ]
+  },
+  {
+    "id": "fn-normalize-button-batch",
+    "type": "function",
+    "z": "handrehab-flow",
+    "name": "normalize_button_batch",
+    "func": "let data = msg.payload;\nconst sourceTopic = msg.topic;\nif (Buffer.isBuffer(data)) data = data.toString();\nif (typeof data === 'string') {\n    try { data = JSON.parse(data); } catch (error) {\n        return [null, { payload: { error: 'invalid_json', source_topic: sourceTopic, raw_payload: data } }];\n    }\n}\nif (!data || typeof data !== 'object') {\n    return [null, { payload: { error: 'invalid_payload', source_topic: sourceTopic, raw_payload: data } }];\n}\nconst required = ['device_id', 'session_id', 'hand', 'mode', 'batch_id', 'strategy', 'events'];\nconst missing = required.filter((key) => data[key] === undefined || data[key] === null);\nif (missing.length) {\n    return [null, { payload: { error: 'missing_fields', missing, source_topic: sourceTopic, raw_payload: data } }];\n}\nmsg.payload = { ...data, source_topic: sourceTopic };\nmsg.method = 'POST';\nmsg.url = env.get('BACKEND_URL') + '/api/v1/ingest/batches/buttons';\nmsg.headers = { 'Content-Type': 'application/json' };\nreturn [msg, null];",
+    "outputs": 2,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 380,
+    "wires": [
+      [
+        "http-post-button-batch"
+      ],
+      [
+        "debug-invalid-payload"
+      ]
+    ]
+  },
+  {
+    "id": "http-post-button-batch",
+    "type": "http request",
+    "z": "handrehab-flow",
+    "name": "POST button batch",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 700,
+    "y": 380,
+    "wires": [
+      [
+        "debug-button-batch-response"
+      ]
+    ]
+  },
+  {
+    "id": "debug-button-batch-response",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug button batch response",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 980,
+    "y": 380,
+    "wires": []
+  },
+  {
+    "id": "mqtt-batch-pressure",
+    "type": "mqtt in",
+    "z": "handrehab-flow",
+    "name": "batch pressure",
+    "topic": "rehab/devices/+/batch/pressure",
+    "qos": "0",
+    "datatype": "auto",
+    "broker": "mqtt-local",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 460,
+    "wires": [
+      [
+        "fn-normalize-pressure-batch"
+      ]
+    ]
+  },
+  {
+    "id": "fn-normalize-pressure-batch",
+    "type": "function",
+    "z": "handrehab-flow",
+    "name": "normalize_pressure_batch",
+    "func": "let data = msg.payload;\nconst sourceTopic = msg.topic;\nif (Buffer.isBuffer(data)) data = data.toString();\nif (typeof data === 'string') {\n    try { data = JSON.parse(data); } catch (error) {\n        return [null, { payload: { error: 'invalid_json', source_topic: sourceTopic, raw_payload: data } }];\n    }\n}\nif (!data || typeof data !== 'object') {\n    return [null, { payload: { error: 'invalid_payload', source_topic: sourceTopic, raw_payload: data } }];\n}\nconst required = ['device_id', 'session_id', 'hand', 'mode', 'batch_id', 'strategy', 'samples'];\nconst missing = required.filter((key) => data[key] === undefined || data[key] === null);\nif (missing.length) {\n    return [null, { payload: { error: 'missing_fields', missing, source_topic: sourceTopic, raw_payload: data } }];\n}\nmsg.payload = { ...data, source_topic: sourceTopic };\nmsg.method = 'POST';\nmsg.url = env.get('BACKEND_URL') + '/api/v1/ingest/batches/pressure';\nmsg.headers = { 'Content-Type': 'application/json' };\nreturn [msg, null];",
+    "outputs": 2,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 430,
+    "y": 460,
+    "wires": [
+      [
+        "http-post-pressure-batch"
+      ],
+      [
+        "debug-invalid-payload"
+      ]
+    ]
+  },
+  {
+    "id": "http-post-pressure-batch",
+    "type": "http request",
+    "z": "handrehab-flow",
+    "name": "POST pressure batch",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 710,
+    "y": 460,
+    "wires": [
+      [
+        "debug-pressure-batch-response"
+      ]
+    ]
+  },
+  {
+    "id": "debug-pressure-batch-response",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug pressure batch response",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 990,
+    "y": 460,
+    "wires": []
+  },
+  {
+    "id": "debug-invalid-payload",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug invalid payload",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 730,
+    "y": 560,
+    "wires": []
+  }
+]

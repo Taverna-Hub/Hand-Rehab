@@ -1,132 +1,304 @@
-# Estrutura do Repositório
+# Hand Rehab MVP
 
-├── README.md # Descrição do projeto, requisitos, instruções.
-├── /docs # Relatório em PDF (MNR - ABNT2) + imagens.
-├── /applications # Códigos Backend + Frontend + Outros.
-├── /esp32-esp8266 # Firmware dos módulos (FreeRTOS).
-└── /schematics # Diagramas eletrônicos (Tinkercad, Fritzing, Wokwi,
-KiCad ou outra ferramenta de prototipação).
+Sistema IoT para apoiar atividades de reabilitacao das maos com ESP32, quatro botoes fisicos, sensor de pressao HX710B, Node-RED, backend FastAPI e Postgres.
+
+Este MVP entrega a base tecnica de comunicacao em tempo real e persistencia historica em batch. Gameplay completo, dashboard funcional, autenticacao e regras clinicas avancadas ficam fora deste ciclo.
+
+## Layout do repositorio
+
+O PRD sugere pastas como `backend/`, `frontend/`, `nodered/` e `firmware/`. Este repositorio preserva o layout inicial:
+
+- Backend: `applications/backend/`
+- Frontend: `applications/frontend/`
+- Node-RED: `applications/node-red/`
+- Firmware: `esp32-esp8266/hand-rehab/`
+- PRD e referencias: `dev-docs/`
+
+## Arquitetura
+
+Fluxo de tempo real:
+
+```text
+ESP32 -> MQTT -> Node-RED/Aedes -> WebSocket Node-RED -> Frontend
+```
+
+Fluxo de persistencia:
+
+```text
+ESP32 -> batch MQTT -> Node-RED -> FastAPI Backend -> Postgres
+```
+
+Controle de sessao:
+
+```text
+Postman/frontend futuro -> Backend -> MQTT start/end -> ESP32
+ESP32 -> MQTT ACK de sessao -> Node-RED -> WebSocket
+```
+
+O backend e o banco nao ficam no caminho critico dos inputs do jogador. A ESP32 inicia em idle e so publica realtime/batch depois de receber `start_session` do backend.
+
+## Tecnologias
+
+- Firmware: PlatformIO, Arduino Framework, FreeRTOS, PubSubClient, ArduinoJson.
+- MQTT/Broker: Aedes dentro do Node-RED.
+- Backend: FastAPI, SQLAlchemy async, Alembic, Pydantic.
+- Banco: Postgres.
+- Frontend: React, Vite, Tailwind.
+- Orquestracao: Docker Compose.
+
+## Ambiente Docker
+
+Use `.env.example` como referencia para criar `.env` local. Valores minimos:
+
+```env
+POSTGRES_DB=rehab_game
+POSTGRES_USER=rehab_user
+POSTGRES_PASSWORD=rehab_password
+POSTGRES_HOST=postgres
+POSTGRES_PORT=5432
+DATABASE_URL=postgresql+asyncpg://rehab_user:rehab_password@postgres:5432/rehab_game
+BACKEND_URL=http://backend:8000
+NODE_RED_PORT=1880
+MQTT_PORT=1883
+MQTT_HOST=node-red
+DEFAULT_DEVICE_ID=esp32-001
+FRONTEND_PORT=5173
+```
+
+Suba a stack:
+
+```bash
+docker compose up --build
+```
+
+URLs locais:
+
+- Backend health: `http://localhost:8000/health`
+- Node-RED: `http://localhost:1880`
+- MQTT Aedes: `localhost:1883`
+- Frontend: `http://localhost:5173`
+
+Validar a configuracao do Compose:
+
+```bash
+docker compose config
+```
+
+## Node-RED
+
+O fluxo oficial versionado fica em:
+
+```text
+applications/node-red/flows.json
+```
+
+O container monta esse arquivo em `/data/flows.json`. Ele cria o broker Aedes na porta `1883`, recebe os topicos MQTT oficiais, encaminha realtime para `ws://localhost:1880/ws/realtime` e envia batches para o backend usando `BACKEND_URL`.
 
 ## Firmware ESP32
 
-O firmware principal está em `esp32-esp8266/hand-rehab`. Ele usa PlatformIO com
-Arduino ESP32, FreeRTOS, interrupções nos botões, MQTT para comunicação com o
-Node-RED e HX710B para leitura do sensor de pressão MPS20N0040D.
+O projeto PlatformIO fica em:
 
-### Funções
-
-- **Modo 1:** lê quatro botões por interrupção e publica os eventos no MQTT.
-- **Modo 2:** lê o sensor de pressão barométrico MPS20N0040D pelo HX710B e publica
-  amostras periódicas no MQTT.
-
-### Pinos configurados
-
-- Botão 1: GPIO 18
-- Botão 2: GPIO 19
-- Botão 3: GPIO 21
-- Botão 4: GPIO 22
-- HX710B OUT: GPIO 32
-- HX710B SCK: GPIO 33
-
-Os botões foram configurados com `INPUT_PULLUP`, então devem fechar contato com
-GND quando pressionados. Ajuste os pinos em `src/main.cpp` se o circuito usar
-outra pinagem.
-
-### Tópicos MQTT
-
-- `hand-rehab/esp32/status`: estado online/offline do ESP32.
-- `hand-rehab/esp32/mode/set`: tópico de comando para alternar o modo.
-- `hand-rehab/esp32/mode/state`: modo atual publicado com retain.
-- `hand-rehab/esp32/buttons`: eventos dos quatro botões no modo 1.
-- `hand-rehab/esp32/pressure`: leitura do sensor de pressão no modo 2.
-
-Para trocar de modo pelo Node-RED, publique `1` ou `buttons` no tópico
-`hand-rehab/esp32/mode/set` para o modo de botões, e `2` ou `pressure` para o
-modo de pressão.
-
-Antes de gravar no ESP32, configure o arquivo `.env` na raiz do repositório.
-Existe um `.env.example` com o formato esperado:
-
-```env
-WIFI_SSID=SUA_REDE_WIFI
-WIFI_PASSWORD=SUA_SENHA_WIFI
-MQTT_BROKER=192.168.0.10
-MQTT_PORT=1883
-MQTT_CLIENT_ID=esp32-hand-rehab
-NODE_RED_MQTT_BROKER=127.0.0.1
-NODE_RED_CLIENT_ID=node-red-hand-rehab
+```text
+esp32-esp8266/hand-rehab/
 ```
 
-O PlatformIO carrega esse arquivo por meio de
-`esp32-esp8266/hand-rehab/scripts/load_env.py` e passa os valores para o firmware
-como macros de compilação. Assim, SSID, senha e IP do broker não ficam fixos no
-`main.cpp`.
+Crie `include/secrets.h` com base em `include/secrets.example.h`:
 
-### Estrutura FreeRTOS no firmware
+```cpp
+#pragma once
 
-O `setup()` apenas inicializa o hardware e cria os recursos do FreeRTOS. Depois
-disso, o processamento fica dividido em tarefas:
+#define WIFI_SSID "NOME_DA_REDE"
+#define WIFI_PASSWORD "SENHA_DA_REDE"
+#define MQTT_HOST "192.168.0.100"
+#define MQTT_PORT 1883
+#define DEVICE_ID "esp32-001"
+```
 
-- `taskMqtt`: mantém Wi-Fi/MQTT conectado, assina comandos do Node-RED e roda
-  `mqttClient.loop()`.
-- `taskButtons`: recebe eventos vindos das interrupções dos botões por uma fila
-  FreeRTOS e publica no MQTT quando o modo 1 está ativo.
-- `taskPressure`: lê o MPS20N0040D pelo HX710B em intervalo fixo e publica no MQTT
-  quando o modo 2 está ativo.
+`MQTT_HOST` deve ser o IP LAN do computador que roda Docker, nunca `nodered`. No Windows, use `ipconfig` e procure o IPv4 da interface Wi-Fi ou Ethernet. No Linux/macOS, use `ip addr` ou `ifconfig`.
 
-As interrupções dos botões não publicam MQTT diretamente. Elas apenas colocam um
-`ButtonEvent` na fila `buttonQueue` usando `xQueueSendFromISR()`, que é o jeito
-seguro de conversar entre ISR e tarefa no FreeRTOS.
-
-### Como conectar com o Node-RED
-
-1. Instale ou abra um broker MQTT. O mais comum é Mosquitto, usando porta `1883`.
-2. Descubra o IP da máquina onde o broker está rodando. Esse IP deve ser colocado
-   em `MQTT_BROKER` no `.env`.
-3. No Node-RED, importe o fluxo em
-   `applications/node-red/hand-rehab-flow.json`.
-4. O nó chamado `Broker MQTT Local` usa variáveis de ambiente:
-   - servidor: `${NODE_RED_MQTT_BROKER}`;
-   - porta: `${MQTT_PORT}`;
-   - client id: `${NODE_RED_CLIENT_ID}`.
-5. Clique em **Deploy** no Node-RED.
-6. Grave o ESP32 com o mesmo `.env` configurado.
-
-Para iniciar o Node-RED carregando o `.env`, rode no terminal a partir da raiz do
-repositório:
+Comandos PlatformIO:
 
 ```bash
-set -a
-source .env
-set +a
-node-red
+pio run
+pio run --target upload
+pio device monitor
 ```
 
-Se o Node-RED já estiver rodando como serviço, configure essas mesmas variáveis
-no ambiente do serviço antes de iniciar o Node-RED.
+Pinos centralizados em `src/config/pins.h`:
 
-Se você estiver usando o broker Aedes dentro do próprio Node-RED, deixe
-`NODE_RED_MQTT_BROKER=127.0.0.1`. Já o `MQTT_BROKER` usado pelo ESP32 deve ser o
-IP da máquina na rede Wi-Fi, por exemplo `192.168.0.10`.
+- Botao 1: D13 / GPIO 13
+- Botao 2: D12 / GPIO 12
+- Botao 3: D14 / GPIO 14
+- Botao 4: D27 / GPIO 27
+- HX710B DOUT/OUT: D15 / GPIO 15
+- HX710B SCK/CLK: D2 / GPIO 2
+- LED status: D23 / GPIO 23
 
-Quando o ESP32 conectar, o Node-RED deve receber:
+## Topicos MQTT
 
-- `online` em `hand-rehab/esp32/status`;
-- `1` ou `2` em `hand-rehab/esp32/mode/state`;
-- JSON dos botões em `hand-rehab/esp32/buttons`, por exemplo
-  `{"button":1,"pin":18,"pressed":1,"mode":1}`;
-- JSON da pressão em `hand-rehab/esp32/pressure`, por exemplo
-  `{"pressure":0.123,"pressure_kpa":0.123,"pressure_mmhg":0.92,"raw":12345,"net":1234,"timeouts":0,"mode":2}`.
+Realtime:
 
-No fluxo importado, a mensagem de pressão passa pelo nó
-**Normalizar pressao HX710B** e sai separada nos debugs:
+- `rehab/devices/{device_id}/realtime/buttons`
+- `rehab/devices/{device_id}/realtime/pressure`
+- `rehab/devices/{device_id}/realtime/session`
 
-- **debug pressao completa**: objeto normalizado completo.
-- **debug pressao kPa**: valor numérico em kPa.
-- **debug pressao mmHg**: valor numérico em mmHg.
-- **debug raw net timeouts**: valores brutos para calibração e diagnóstico.
+Batch:
 
-No fluxo importado, use os nós de injeção:
+- `rehab/devices/{device_id}/batch/buttons`
+- `rehab/devices/{device_id}/batch/pressure`
 
-- **Ativar modo 1 botoes**: envia `1` para o ESP32.
-- **Ativar modo 2 pressao**: envia `2` para o ESP32.
+Comandos opcionais:
+
+- `rehab/devices/{device_id}/commands/start_session`
+- `rehab/devices/{device_id}/commands/end_session`
+- `rehab/devices/{device_id}/commands/calibrate`
+- `rehab/devices/{device_id}/commands/tare`
+- `rehab/devices/{device_id}/commands/ping`
+
+## Exemplos de payload
+
+Comando de inicio publicado pelo backend:
+
+```json
+{
+  "session_id": "uuid-da-sessao",
+  "user_id": "uuid-do-usuario",
+  "hand": "right",
+  "mode": "buttons"
+}
+```
+
+ACK de inicio publicado pela ESP32 em `realtime/session`:
+
+```json
+{
+  "device_id": "esp32-001",
+  "session_id": "uuid-da-sessao",
+  "user_id": "uuid-do-usuario",
+  "hand": "right",
+  "mode": "buttons",
+  "event_type": "session_started",
+  "timestamp_ms": 1234
+}
+```
+
+Realtime de botao:
+
+```json
+{
+  "device_id": "esp32-001",
+  "session_id": "uuid-da-sessao",
+  "user_id": "uuid-do-usuario",
+  "hand": "right",
+  "mode": "buttons",
+  "button_id": 1,
+  "event_type": "pressed",
+  "timestamp_ms": 123456
+}
+```
+
+Realtime de pressao:
+
+```json
+{
+  "device_id": "esp32-001",
+  "session_id": "uuid-da-sessao",
+  "user_id": "uuid-do-usuario",
+  "hand": "left",
+  "mode": "pressure",
+  "pressure_raw": 84532,
+  "pressure_kpa": null,
+  "timestamp_ms": 123456
+}
+```
+
+Batch de botoes:
+
+```json
+{
+  "device_id": "esp32-001",
+  "session_id": "uuid-da-sessao",
+  "user_id": "uuid-do-usuario",
+  "hand": "right",
+  "mode": "buttons",
+  "batch_id": "buttons-batch-001",
+  "strategy": "ring_buffer",
+  "sequence_start": 1,
+  "sequence_end": 2,
+  "created_at_ms": 123900,
+  "performance": {
+    "insert_latency_us_avg": 8,
+    "insert_latency_us_max": 15,
+    "mqtt_publish_latency_us": 1200,
+    "free_heap_bytes": 185320,
+    "min_free_heap_bytes": 184900,
+    "buffer_capacity": 64,
+    "buffer_used": 2,
+    "dropped_samples": 0
+  },
+  "events": [
+    {"button_id": 1, "event_type": "pressed", "timestamp_ms": 123456, "sequence": 1}
+  ]
+}
+```
+
+Batch de pressao:
+
+```json
+{
+  "device_id": "esp32-001",
+  "session_id": "uuid-da-sessao",
+  "user_id": "uuid-do-usuario",
+  "hand": "left",
+  "mode": "pressure",
+  "batch_id": "pressure-batch-001",
+  "strategy": "ring_buffer",
+  "sequence_start": 1,
+  "sequence_end": 2,
+  "created_at_ms": 123900,
+  "performance": {
+    "insert_latency_us_avg": 7,
+    "insert_latency_us_max": 13,
+    "mqtt_publish_latency_us": 1500,
+    "free_heap_bytes": 185100,
+    "min_free_heap_bytes": 184700,
+    "buffer_capacity": 64,
+    "buffer_used": 2,
+    "dropped_samples": 0
+  },
+  "samples": [
+    {"pressure_raw": 84532, "pressure_kpa": null, "timestamp_ms": 123456, "sequence": 1}
+  ]
+}
+```
+
+## Endpoints principais
+
+- `GET /health`
+- `POST /api/v1/users`
+- `GET /api/v1/users`
+- `GET /api/v1/users/{user_id}`
+- `POST /api/v1/game-sessions/start`
+- `GET /api/v1/game-sessions`
+- `GET /api/v1/game-sessions/{session_id}`
+- `PATCH /api/v1/game-sessions/{session_id}/finish`
+- `POST /api/v1/ingest/batches/buttons`
+- `POST /api/v1/ingest/batches/pressure`
+- `GET /api/v1/metrics/sessions/{session_id}/summary`
+- `GET /api/v1/metrics/users/{user_id}/summary`
+
+## Buffer Circular
+
+A estrategia eficiente do firmware usa Ring Buffer com capacidade fixa, indices `head` e `tail`, insercao/remocao O(1) e contador de drops. A estrategia comparativa ineficiente usa deslocamento de elementos em vetor, com remocao O(n), apenas para analise academica.
+
+Cada batch inclui `performance` com latencia de insercao, latencia de envio MQTT, heap livre, menor heap observado, uso do buffer e drops acumulados.
+
+## Limitacoes do MVP
+
+- Sem gameplay completo.
+- Sem dashboard historica funcional.
+- Sem autenticacao.
+- Sem regras clinicas avancadas.
+- Sem sessao fixa no firmware: a ESP32 inicia idle e aguarda `start_session`.
+- Frontend permanece minimo; inicio/fim de sessao podem ser testados via Postman.
+- Teste fisico depende de ESP32, botoes e HX710B conectados.

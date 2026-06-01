@@ -1,0 +1,833 @@
+# Todo-list de implementacao do MVP Hand Rehab
+
+Fonte dos requisitos:
+
+- `dev-docs/prd_inicial_jogo_ritmo_reabilitacao_maos.md`
+- `dev-docs/Projeto-Embarcados_CesarSchool-v2.pdf`
+- `dev-docs/Requisitos - AA.pdf`
+
+Como usar esta lista com um agente de codigo:
+
+- Marque cada item com `[x]` somente depois de implementar e verificar.
+- Mantenha o escopo do MVP. Nao implemente gameplay completo, dashboard funcional, autenticacao ou regras clinicas avancadas neste ciclo.
+- Antes de editar arquivos existentes, audite o estado atual e preserve o que ja funciona.
+- Ao concluir uma fase, registre evidencias curtas no item de validacao da propria fase: comando executado, endpoint testado, arquivo criado ou limitacao encontrada.
+- Se algum item for deliberadamente adiado, mantenha `[ ]` e adicione uma nota `Bloqueado:` ou `Adiado:` logo abaixo.
+
+## Estado inicial observado
+
+- [x] Confirmar novamente o estado inicial antes de comecar, pois o repositorio pode ter mudado.
+  - Evidencia: `rg --files` e leitura dos arquivos principais em 2026-05-30.
+- [x] Registrar `git status --short` antes das alteracoes e nao reverter mudancas de terceiros.
+  - Evidencia: `M .gitignore`, `?? IMPLEMENTATION_TODO.md`, `?? entregas/`.
+- [x] Conferir que `dev-docs/` contem o PRD e os dois PDFs de referencia.
+  - Evidencia: `prd_inicial_jogo_ritmo_reabilitacao_maos.md`, `Projeto-Embarcados_CesarSchool-v2.pdf`, `Requisitos - AA.pdf`.
+- [x] Confirmar que `docker-compose.yml` atual sobe apenas `node-red`; faltam `postgres`, `backend` e `frontend`.
+  - Evidencia: leitura de `docker-compose.yml` mostrou somente o servico `node-red`.
+- [x] Confirmar que `applications/backend/` e `applications/frontend/` estao vazios ou quase vazios.
+  - Evidencia: ambas as pastas continham apenas `.gitkeep`.
+- [x] Confirmar que `applications/node-red/hand-rehab-flow.json` existe, mas usa topicos antigos `hand-rehab/esp32/...`.
+  - Evidencia: fluxo lido com topicos `hand-rehab/esp32/status`, `hand-rehab/esp32/buttons` e `hand-rehab/esp32/pressure`.
+- [x] Confirmar que o firmware `esp32-esp8266/hand-rehab` ja usa PlatformIO, Arduino, FreeRTOS, botoes, HX710B e MQTT basico.
+  - Evidencia: `platformio.ini` usa `framework = arduino`; `src/main.cpp` usa tasks, filas, interrupcoes, PubSubClient e HX710B.
+- [x] Confirmar que o firmware ainda nao implementa contrato MQTT do PRD, batches, Ring Buffer, estrategia ineficiente comparativa e metadados de performance.
+  - Evidencia: `src/main.cpp` usa topicos antigos e nao contem `RingBuffer`, `batch_id` ou `performance`.
+- [x] Confirmar que `.gitignore` ignora `.env` e atualmente tambem ignora `dev-docs/`.
+  - Evidencia: `.gitignore` contem `.env` e `dev-docs/`.
+
+## Atualizacao 2026-05-30 - fluxo de sessao iniciado pelo backend
+
+- [x] Backend cria sessao `running` via `POST /api/v1/game-sessions/start` sem exigir `duration_seconds`.
+  - Evidencia: `python -m pytest` em `applications/backend` retornou `12 passed`; teste cobre `duration_seconds=null`, `scheduled_finish_at=null` e `status=running`.
+- [x] Backend publica comando MQTT `start_session` em `rehab/devices/{device_id}/commands/start_session`.
+  - Evidencia: teste `test_start_publishes_mqtt_command` mocka o publisher e valida topico/payload.
+- [x] Backend calcula `duration_seconds` real no finish e publica `end_session`.
+  - Evidencia: teste `test_finish_calculates_duration_and_publishes_mqtt` valida duracao calculada e topico `commands/end_session`; `PATCH /finish` tambem aceita corpo ausente ou `{}`.
+- [x] Backend mantem validacoes de usuario, mao, modo e ingestao batch para sessao `running`.
+  - Evidencia: `python -m pytest` cobre usuario inexistente, `hand`/`mode` invalidos e batches compativeis.
+- [x] Node-RED possui fluxo `rehab/devices/+/realtime/session` para `ws://localhost:1880/ws/realtime`.
+  - Evidencia: `node -e ... JSON.parse(...)` validou `flows.json` com 25 nos e `sessionFlow=true`.
+- [x] Firmware inicia idle, remove sessao fixa padrao e publica dados somente apos `start_session`.
+  - Evidencia: `pio run` retornou `[SUCCESS]`; `setDefaultSession()` removido e tasks seguem ignorando entradas quando `!session.active`.
+- [x] Frontend mantido minimo, sem nova UI de sessao nesta rodada.
+  - Evidencia: decisao tomada em 2026-05-30; start/finish serao feitos via Postman.
+- [x] Validacao integrada sem ESP32 cobre comandos MQTT start/end e ACK manual via WebSocket.
+  - Evidencia: script local criou usuario `ffd8a1ca-48d4-4ef7-9327-ca2d9dc5b355`, sessao `1071fb2c-3267-43bc-8670-d307aeb30899`, capturou `commands/start_session`, recebeu `session_started` no WebSocket e capturou `commands/end_session`.
+
+## Fase 0 - Decisoes de escopo e layout
+
+- [x] Manter o layout atual do repositorio, salvo se houver motivo forte para migrar:
+  - Backend em `applications/backend/`.
+  - Frontend em `applications/frontend/`.
+  - Node-RED em `applications/node-red/`.
+  - Firmware em `esp32-esp8266/hand-rehab/`.
+  - Evidencia: layout preservado e usado no Compose/docs.
+- [x] Documentar no README o mapeamento entre o layout atual e o layout sugerido no PRD.
+  - Evidencia: README possui secao `Layout do repositorio`.
+- [x] Criar ou atualizar `docs/architecture.md` com os dois fluxos:
+  - Tempo real: ESP32 -> MQTT -> Node-RED -> frontend.
+  - Persistencia: ESP32 -> batch MQTT -> Node-RED -> backend -> Postgres.
+  - Evidencia: `Test-Path docs/architecture.md` retornou `True`.
+- [x] Criar ou atualizar `docs/mqtt-topics.md` com todos os topicos oficiais.
+  - Evidencia: `Test-Path docs/mqtt-topics.md` retornou `True`.
+- [x] Criar ou atualizar `docs/api.md` com os endpoints obrigatorios.
+  - Evidencia: `Test-Path docs/api.md` retornou `True`.
+- [x] Criar ou atualizar `docs/buffering-analysis.md` com a estrategia Ring Buffer versus abordagem ineficiente.
+  - Evidencia: `Test-Path docs/buffering-analysis.md` retornou `True`.
+
+## Fase 1 - Configuracao de ambiente e Docker Compose
+
+- [x] Atualizar `.env.example` para separar variaveis dos containers e variaveis do firmware.
+  - Evidencia: `.env.example` contem blocos de containers e firmware.
+- [x] Incluir variaveis minimas dos containers em `.env.example`:
+  - `POSTGRES_DB=rehab_game`
+  - `POSTGRES_USER=rehab_user`
+  - `POSTGRES_PASSWORD=rehab_password`
+  - `POSTGRES_HOST=postgres`
+  - `POSTGRES_PORT=5432`
+  - `DATABASE_URL=postgresql+asyncpg://rehab_user:rehab_password@postgres:5432/rehab_game`
+  - `BACKEND_HOST=backend`
+  - `BACKEND_PORT=8000`
+  - `BACKEND_URL=http://backend:8000`
+  - `NODE_RED_PORT=1880`
+  - `MQTT_PORT=1883`
+  - `MQTT_HOST=nodered`
+  - `FRONTEND_PORT=5173`
+- [x] Incluir variaveis ou documentacao do firmware sem segredos reais:
+  - `WIFI_SSID`
+  - `WIFI_PASSWORD`
+  - `MQTT_HOST` como IP LAN do computador, nunca `nodered`.
+  - `MQTT_PORT=1883`
+  - `DEVICE_ID=esp32-001`
+  - Evidencia: `.env.example` e `secrets.example.h` documentam os valores sem segredos reais.
+- [x] Garantir que `.env` continua ignorado pelo Git.
+  - Evidencia: `.gitignore` contem `.env`.
+- [x] Criar `esp32-esp8266/hand-rehab/include/secrets.example.h`.
+  - Evidencia: arquivo criado em `esp32-esp8266/hand-rehab/include/secrets.example.h`.
+- [x] Garantir que `esp32-esp8266/hand-rehab/include/secrets.h` fica ignorado pelo Git.
+  - Evidencia: `.gitignore` contem `esp32-esp8266/hand-rehab/include/secrets.h`.
+- [x] Atualizar `docker-compose.yml` com servicos obrigatorios:
+  - `postgres`
+  - `backend`
+  - `node-red`
+  - `frontend`
+  - Evidencia: `docker-compose.yml` contem os quatro servicos.
+- [x] Configurar volume persistente para Postgres.
+  - Evidencia: `postgres_data:/var/lib/postgresql/data` configurado.
+- [x] Configurar rede comum para todos os containers.
+  - Evidencia: rede `handrehab` configurada nos quatro servicos.
+- [x] Configurar `backend` com `DATABASE_URL` e dependencia de `postgres`.
+  - Evidencia: servico `backend` usa `DATABASE_URL` e `depends_on` com healthcheck do Postgres.
+- [x] Configurar `node-red` com `BACKEND_URL=http://backend:8000`.
+  - Evidencia: servico `node-red` recebe `BACKEND_URL` com default `http://backend:8000`.
+- [x] Expor portas:
+  - Postgres `5432:5432`
+  - Backend `8000:8000`
+  - Node-RED UI `1880:1880`
+  - MQTT Aedes `1883:1883`
+  - Frontend `5173:5173`
+  - Evidencia: portas `5432`, `8000`, `1880`, `1883` e `5173` configuradas.
+- [x] Garantir que nenhum container use `localhost` para chamar outro container.
+  - Evidencia: `rg "localhost" docker-compose.yml .env.example applications ...` nao encontrou chamadas entre containers.
+- [x] Validar fase com `docker compose config`.
+  - Evidencia: `docker compose config` executou com exit code 0.
+
+## Fase 2 - Backend FastAPI base
+
+- [x] Criar projeto FastAPI em `applications/backend/`.
+  - Evidencia: pacote `app/` criado e testes importam `app.main`.
+- [x] Criar `applications/backend/Dockerfile`.
+  - Evidencia: `applications/backend/Dockerfile` criado.
+- [x] Criar `pyproject.toml` ou arquivos equivalentes de dependencias.
+  - Evidencia: `applications/backend/pyproject.toml` criado e instalado com `python -m pip install -e ".[test]"`.
+- [x] Incluir dependencias minimas:
+  - FastAPI
+  - Uvicorn
+  - SQLAlchemy
+  - asyncpg
+  - Alembic
+  - Pydantic
+  - pytest e httpx para testes
+  - Evidencia: dependencias declaradas em `pyproject.toml`; instalacao local concluida.
+- [x] Criar estrutura de pacotes:
+  - `app/main.py`
+  - `app/core/config.py`
+  - `app/core/logging.py`
+  - `app/db/base.py`
+  - `app/db/session.py`
+  - `app/models/`
+  - `app/schemas/`
+  - `app/repositories/`
+  - `app/services/`
+  - `app/api/v1/`
+  - Evidencia: arquivos e pacotes criados em `applications/backend/app/`.
+- [x] Implementar leitura de configuracao por ambiente, especialmente `DATABASE_URL`.
+  - Evidencia: `app/core/config.py` usa `pydantic-settings` e `app/db/session.py` usa `settings.database_url`.
+- [x] Implementar `GET /health` retornando `{"status":"ok"}`.
+  - Evidencia: teste `test_health` passou com resposta `{"status":"ok"}`.
+- [x] Garantir CORS apenas se necessario para o frontend base ou testes.
+  - Evidencia: CORS limitado ao default `http://localhost:5173`.
+- [x] Validar fase rodando backend localmente ou via Docker e acessando `/health`.
+  - Evidencia: `python -m pytest` validou `/health` via ASGI; validacao Docker ficara nos criterios finais.
+
+## Fase 3 - Banco, modelos e migrations
+
+- [x] Configurar Alembic em `applications/backend/alembic.ini` e `applications/backend/alembic/`.
+  - Evidencia: `alembic.ini`, `alembic/env.py` e `alembic/versions/` criados.
+- [x] Criar migration inicial versionada.
+  - Evidencia: `alembic/versions/20260530_0001_initial_schema.py` criado.
+- [x] Criar modelo e tabela `users`:
+  - `id UUID PK`
+  - `name VARCHAR NOT NULL`
+  - `age INTEGER NOT NULL`
+  - `sex ENUM('female','male','other','not_informed') NOT NULL`
+  - `created_at TIMESTAMP NOT NULL`
+  - `updated_at TIMESTAMP NOT NULL`
+- [x] Criar modelo e tabela `devices`:
+  - `id UUID PK`
+  - `device_id VARCHAR UNIQUE NOT NULL`
+  - `firmware_version VARCHAR NULL`
+  - `last_status VARCHAR NULL`
+  - `wifi_rssi INTEGER NULL`
+  - `last_seen_at TIMESTAMP NULL`
+  - `created_at TIMESTAMP NOT NULL`
+  - `updated_at TIMESTAMP NOT NULL`
+- [x] Criar modelo e tabela `game_sessions`:
+  - `id UUID PK`
+  - `user_id UUID FK users(id) NOT NULL`
+  - `device_id` vinculado a `devices.device_id`
+  - `hand ENUM('left','right') NOT NULL`
+  - `mode ENUM('buttons','pressure') NOT NULL`
+  - `duration_seconds INTEGER NULL`
+  - `status ENUM('created','running','finished','cancelled','error') NOT NULL`
+  - `started_at TIMESTAMP NOT NULL`
+  - `scheduled_finish_at TIMESTAMP NULL`
+  - `finished_at TIMESTAMP NULL`
+  - `notes TEXT NULL`
+  - `created_at TIMESTAMP NOT NULL`
+  - `updated_at TIMESTAMP NOT NULL`
+- [x] Criar modelo e tabela `telemetry_batches`.
+  - Evidencia: modelo SQLAlchemy e migration inicial incluem `telemetry_batches`.
+- [x] Criar modelo e tabela `batch_performance_metadata`.
+  - Evidencia: modelo SQLAlchemy e migration inicial incluem `batch_performance_metadata`.
+- [x] Criar modelo e tabela `button_events`.
+  - Evidencia: modelo SQLAlchemy e migration inicial incluem `button_events`.
+- [x] Criar modelo e tabela `pressure_readings`.
+  - Evidencia: modelo SQLAlchemy e migration inicial incluem `pressure_readings`.
+- [x] Adicionar constraints:
+  - `duration_seconds IS NULL OR duration_seconds >= 0`
+  - `button_id` entre 1 e 4
+  - `hand` somente `left` ou `right`
+  - `mode` somente `buttons` ou `pressure`
+  - Evidencia: constraints declaradas em modelos e migration; testes validam valores invalidos via API.
+- [x] Garantir que `received_at` usa timestamp do servidor para batches.
+  - Evidencia: `TelemetryBatch.received_at` usa default `utc_now` e migration usa `server_default=sa.func.now()`.
+- [x] Garantir que `device_id` pode ser criado automaticamente durante criacao de sessao ou ingestao.
+  - Evidencia: `get_or_create_device` e `_ensure_device` criam dispositivo quando ausente.
+- [x] Validar fase executando migrations contra Postgres.
+  - Evidencia: backend subiu via Docker, executou `alembic upgrade head` e `psql \dt` mostrou as tabelas esperadas.
+
+## Fase 4 - Endpoints de usuarios e sessoes
+
+- [x] Implementar schemas Pydantic de usuario.
+  - Evidencia: `app/schemas/users.py`.
+- [x] Implementar `POST /api/v1/users`.
+  - Evidencia: teste `test_users_crud_minimum` passou.
+- [x] Implementar `GET /api/v1/users`.
+  - Evidencia: teste `test_users_crud_minimum` passou.
+- [x] Implementar `GET /api/v1/users/{user_id}`.
+  - Evidencia: teste `test_users_crud_minimum` passou.
+- [x] Validar que `name`, `age` e `sex` sao obrigatorios.
+  - Evidencia: teste `test_user_required_fields_and_sex_validation` passou.
+- [x] Validar valores aceitos para `sex`: `female`, `male`, `other`, `not_informed`.
+  - Evidencia: teste `test_user_required_fields_and_sex_validation` passou.
+- [x] Implementar schemas Pydantic de sessao.
+  - Evidencia: `app/schemas/sessions.py`.
+- [x] Implementar `POST /api/v1/game-sessions`.
+  - Evidencia: mantido como compatibilidade; fluxo atual usa `POST /api/v1/game-sessions/start`.
+- [x] Implementar `POST /api/v1/game-sessions/start`.
+  - Evidencia: teste `test_create_and_get_sessions_with_modes_and_hands` passou criando sessoes `running`.
+- [x] Implementar `GET /api/v1/game-sessions`.
+  - Evidencia: rota implementada em `app/api/v1/game_sessions.py`.
+- [x] Implementar `GET /api/v1/game-sessions/{session_id}`.
+  - Evidencia: teste `test_create_and_get_sessions_with_modes_and_hands` passou.
+- [x] Implementar `PATCH /api/v1/game-sessions/{session_id}/finish`.
+  - Evidencia: rota implementada em `app/api/v1/game_sessions.py`.
+- [x] Validar que `user_id` existe antes de criar sessao.
+  - Evidencia: teste `test_reject_session_without_existing_user` passou.
+- [x] Validar que toda sessao de inicio tem `hand` e `mode`; `duration_seconds` e calculado no fim.
+  - Evidencia: schemas Pydantic exigem `hand`/`mode`; teste confirma `duration_seconds=null` no start e inteiro no finish.
+- [x] Manter `scheduled_finish_at=null` no fluxo iniciado pelo backend.
+  - Evidencia: teste confirma `scheduled_finish_at=null`.
+- [x] Criar ou atualizar `devices` automaticamente quando `device_id` novo aparecer.
+  - Evidencia: `get_or_create_device` chamado na criacao de sessao.
+- [x] Validar fase com requests manuais ou testes automatizados para criar usuario e sessoes `left`, `right`, `buttons` e `pressure`.
+  - Evidencia: `python -m pytest` passou com sessoes `left/right` e `buttons/pressure`.
+
+## Fase 5 - Ingestao batch no backend
+
+- [x] Implementar schemas Pydantic para payload batch de botoes.
+  - Evidencia: `ButtonBatchPayload` em `app/schemas/ingest.py`.
+- [x] Implementar schemas Pydantic para payload batch de pressao.
+  - Evidencia: `PressureBatchPayload` em `app/schemas/ingest.py`.
+- [x] Implementar schema comum para `performance`.
+  - Evidencia: `PerformancePayload` em `app/schemas/ingest.py`.
+- [x] Implementar `POST /api/v1/ingest/batches/buttons`.
+  - Evidencia: teste `test_ingest_compatible_button_batch` passou.
+- [x] Implementar `POST /api/v1/ingest/batches/pressure`.
+  - Evidencia: teste `test_ingest_compatible_pressure_batch` passou.
+- [x] Em ambos os endpoints, validar:
+  - JSON valido.
+  - `device_id`.
+  - `session_id` existente.
+  - `user_id`, quando enviado.
+  - `hand` igual ao `hand` da sessao.
+  - `mode` igual ao `mode` da sessao.
+  - `source_topic`, quando enviado pelo Node-RED.
+  - Evidencia: `ingest.py` valida sessao, usuario, mao, modo e `source_topic`; testes cobrem compatibilidade.
+- [x] Para batch de botoes, persistir somente se a sessao tiver `mode = buttons`.
+  - Evidencia: teste `test_incompatible_batches_are_not_persisted` passou.
+- [x] Para batch de pressao, persistir somente se a sessao tiver `mode = pressure`.
+  - Evidencia: teste `test_incompatible_batches_are_not_persisted` passou.
+- [x] Para modo incompativel, retornar resposta controlada sem persistir eventos/leituras.
+  - Evidencia: resposta `accepted=false` testada em `test_incompatible_batches_are_not_persisted`.
+- [x] Persistir `telemetry_batches` para batches aceitos.
+  - Evidencia: ingestao aceita retorna `telemetry_batch_id`.
+- [x] Persistir `batch_performance_metadata` para batches aceitos.
+  - Evidencia: metricas somam `dropped_samples` e latencias vindas da tabela de performance.
+- [x] Persistir `button_events` com `button_id`, `event_type`, `timestamp_ms` e `sequence`.
+  - Evidencia: teste de batch de botoes persiste 2 eventos.
+- [x] Persistir `pressure_readings` com `pressure_raw`, `pressure_kpa`, `timestamp_ms` e `sequence`.
+  - Evidencia: teste de batch de pressao persiste 2 leituras.
+- [x] Validar que `pressure_raw` e obrigatorio e `pressure_kpa` e opcional.
+  - Evidencia: schema exige `pressure_raw`; teste envia `pressure_kpa` nulo em uma amostra.
+- [x] Validar fase com payloads manuais do PRD para botoes e pressao.
+  - Evidencia: testes usam payloads equivalentes aos exemplos do PRD.
+
+## Fase 6 - Metricas do backend
+
+- [x] Implementar `GET /api/v1/metrics/sessions/{session_id}/summary`.
+  - Evidencia: teste `test_metrics_by_session_and_user` passou.
+- [x] Para sessoes de botoes, retornar pelo menos:
+  - contagem de eventos de botao
+  - contagem de leituras de pressao igual a 0
+  - contagem de batches
+  - drops acumulados
+  - latencia media e maxima de insercao
+  - dados basicos da sessao
+- [x] Para sessoes de pressao, retornar pelo menos:
+  - contagem de leituras de pressao
+  - contagem de eventos de botao igual a 0
+  - media e maximo de `pressure_raw`
+  - media e maximo de `pressure_kpa`, quando existir
+  - contagem de batches
+  - drops acumulados
+  - latencia media e maxima de insercao
+  - dados basicos da sessao
+- [x] Implementar `GET /api/v1/metrics/users/{user_id}/summary`.
+  - Evidencia: teste `test_metrics_by_session_and_user` passou.
+- [x] Retornar por usuario:
+  - total de sessoes
+  - sessoes por modo
+  - sessoes por mao
+  - duracao media
+  - total de eventos de botao
+  - total de leituras de pressao
+  - media e maximo de pressao bruta, quando existir
+  - Evidencia: `UserSummary` inclui totais, agrupamentos e pressao agregada.
+- [x] Validar fase com dados criados por ingestao batch.
+  - Evidencia: `python -m pytest` passou apos criar dados via endpoints de ingestao.
+
+## Fase 7 - Testes do backend
+
+- [x] Criar testes para `/health`.
+- [x] Criar testes para CRUD minimo de usuarios.
+- [x] Criar testes para criacao e consulta de sessoes.
+- [x] Criar teste para rejeitar sessao sem usuario existente.
+- [x] Criar teste para rejeitar `hand` invalido.
+- [x] Criar teste para rejeitar `mode` invalido.
+- [x] Criar teste para fluxo de duracao real calculada no fim.
+  - Evidencia: `test_finish_calculates_duration_and_publishes_mqtt` valida `duration_seconds` calculado.
+- [x] Criar teste para ingerir batch de botoes compativel.
+- [x] Criar teste para ingerir batch de pressao compativel.
+- [x] Criar teste para nao persistir batch de botoes em sessao `pressure`.
+- [x] Criar teste para nao persistir batch de pressao em sessao `buttons`.
+- [x] Criar teste para metricas por sessao.
+- [x] Criar teste para metricas por usuario.
+- [x] Validar fase executando a suite de testes do backend.
+  - Evidencia: `python -m pytest` em `applications/backend` retornou `10 passed`.
+
+## Fase 8 - Node-RED com Aedes e fluxos oficiais
+
+- [x] Criar ou atualizar `applications/node-red/package.json`.
+  - Evidencia: `applications/node-red/package.json` criado.
+- [x] Adicionar dependencia `node-red-contrib-aedes`.
+  - Evidencia: dependencia `node-red-contrib-aedes` declarada como `^1.2.0`.
+- [x] Garantir que `applications/node-red/Dockerfile` instala dependencias do Node-RED.
+  - Evidencia: Dockerfile copia `package.json` e executa `npm install`.
+- [x] Criar ou renomear fluxo versionado para `applications/node-red/flows.json`.
+  - Evidencia: `flows.json` criado e validado com `ConvertFrom-Json`.
+- [x] Atualizar `docker-compose.yml` para montar ou copiar `flows.json` corretamente.
+  - Evidencia: Compose monta `./applications/node-red/flows.json:/data/flows.json:ro`.
+- [x] Configurar broker Aedes dentro do Node-RED na porta MQTT `1883`.
+  - Evidencia: node `aedes broker` em `flows.json` usa `mqtt_port` 1883.
+- [x] Garantir que o Node-RED recebe `BACKEND_URL` pelo ambiente.
+  - Evidencia: Compose injeta `BACKEND_URL` e funcoes usam `env.get('BACKEND_URL')`.
+- [x] Remover chamadas hardcoded para `localhost` quando o destino for backend.
+  - Evidencia: POSTs de batch usam `BACKEND_URL`, nao `localhost`.
+- [x] Implementar fluxo realtime de botoes:
+  - MQTT In `rehab/devices/+/realtime/buttons`
+  - parser JSON
+  - function `normalize_realtime_button`
+  - WebSocket Out ou endpoint realtime equivalente para frontend
+  - Debug
+- [x] Implementar fluxo realtime de pressao:
+  - MQTT In `rehab/devices/+/realtime/pressure`
+  - parser JSON
+  - function `normalize_realtime_pressure`
+  - WebSocket Out ou endpoint realtime equivalente para frontend
+  - Debug
+- [x] Implementar fluxo batch de botoes:
+  - MQTT In `rehab/devices/+/batch/buttons`
+  - parser JSON
+  - function `normalize_button_batch`
+  - HTTP POST `${BACKEND_URL}/api/v1/ingest/batches/buttons`
+  - Debug
+- [x] Implementar fluxo batch de pressao:
+  - MQTT In `rehab/devices/+/batch/pressure`
+  - parser JSON
+  - function `normalize_pressure_batch`
+  - HTTP POST `${BACKEND_URL}/api/v1/ingest/batches/pressure`
+  - Debug
+- [x] Nas funcoes de normalizacao, preservar:
+  - `device_id`
+  - `session_id`
+  - `user_id`
+  - `hand`
+  - `mode`
+  - dados do payload original
+- [x] Nas funcoes de normalizacao, adicionar `source_topic = msg.topic`.
+  - Evidencia: funcoes adicionam `source_topic` antes de WebSocket/HTTP.
+- [x] Encaminhar payload invalido para debug de erro sem derrubar o fluxo.
+  - Evidencia: funcoes possuem segunda saida para `debug invalid payload`.
+- [x] Validar fase importando o fluxo e testando com `mosquitto_pub` ou cliente MQTT equivalente.
+  - Evidencia: stack Docker subiu Node-RED healthy; teste integrado publicou MQTT com `paho-mqtt` e recebeu realtime via WebSocket.
+
+## Fase 9 - Frontend React + Tailwind base
+
+- [x] Criar projeto React em `applications/frontend/`.
+  - Evidencia: `src/main.tsx`, `src/App.tsx` e dependencias React criados.
+- [x] Usar Vite, salvo decisao tecnica documentada em contrario.
+  - Evidencia: `vite.config.ts` e scripts Vite em `package.json`.
+- [x] Configurar Tailwind.
+  - Evidencia: `tailwind.config.js`, `postcss.config.js` e `src/styles.css`.
+- [x] Criar `applications/frontend/Dockerfile`.
+  - Evidencia: Dockerfile criado.
+- [x] Garantir que o servico sobe em `http://localhost:5173`.
+  - Evidencia: `npm run dev -- --host 127.0.0.1 --port 5173` respondeu HTTP 200.
+- [x] Criar pagina inicial simples informando que o frontend ainda esta em desenvolvimento.
+  - Evidencia: `src/pages/GamePlaceholder.tsx`.
+- [x] Criar estrutura preparada para tela futura de jogo:
+  - `src/pages/GamePlaceholder` ou equivalente
+  - `src/realtime/` ou equivalente para conexao futura com Node-RED
+  - tipos/interfaces dos eventos realtime
+  - Evidencia: `src/pages/GamePlaceholder.tsx`, `src/realtime/types.ts` e `src/realtime/nodeRedClient.ts`.
+- [x] Nao implementar dashboard funcional.
+  - Evidencia: frontend contem apenas placeholder, sem rotas/dashboard.
+- [x] Nao implementar jogo completo.
+  - Evidencia: frontend contem apenas placeholder, sem gameplay.
+- [x] Nao consumir metricas historicas neste ciclo.
+  - Evidencia: nao ha chamadas ao backend de metricas no frontend.
+- [x] Validar fase subindo o frontend via Docker Compose.
+  - Evidencia: `docker compose up --build -d` subiu `handrehab-frontend` e `http://localhost:5173` retornou HTTP 200.
+
+## Fase 10 - Firmware: configuracao e contrato MQTT
+
+- [x] Preservar o que ja funciona no firmware atual antes de refatorar.
+  - Evidencia: firmware segue com PlatformIO, Arduino, MQTT, botoes por interrupcao, FreeRTOS e leitura HX710B.
+- [x] Avaliar se a configuracao por `.env` via `scripts/load_env.py` sera mantida como compatibilidade ou substituida por `include/secrets.h`.
+  - Evidencia: `load_env.py` foi mantido como compatibilidade e `secrets.h` passou a ser o caminho recomendado.
+- [x] Garantir que exista `include/secrets.example.h` com:
+  - `WIFI_SSID`
+  - `WIFI_PASSWORD`
+  - `MQTT_HOST`
+  - `MQTT_PORT`
+  - `DEVICE_ID`
+- [x] Garantir que `MQTT_HOST` do firmware e documentado como IP LAN da maquina, nao hostname Docker.
+  - Evidencia: `secrets.example.h` e `.env.example` documentam IP LAN e proibem `nodered`.
+- [x] Centralizar pinos em arquivo dedicado, por exemplo `src/config/pins.h`.
+  - Evidencia: `src/config/pins.h` criado.
+- [x] Ajustar ou documentar pinos reais:
+  - HX710B DOUT
+  - HX710B SCK
+  - Botao 1
+  - Botao 2
+  - Botao 3
+  - Botao 4
+  - LED de status, se usado
+  - Evidencia: pinos preservados em `src/config/pins.h` e firmware compilado.
+- [x] Atualizar topicos MQTT para o contrato oficial:
+  - `rehab/devices/{device_id}/realtime/buttons`
+  - `rehab/devices/{device_id}/realtime/pressure`
+  - `rehab/devices/{device_id}/realtime/session`
+  - `rehab/devices/{device_id}/batch/buttons`
+  - `rehab/devices/{device_id}/batch/pressure`
+- [x] Incluir topicos opcionais de comando, se couber no MVP:
+  - `rehab/devices/{device_id}/commands/start_session`
+  - `rehab/devices/{device_id}/commands/end_session`
+  - `rehab/devices/{device_id}/commands/calibrate`
+  - `rehab/devices/{device_id}/commands/tare`
+  - `rehab/devices/{device_id}/commands/ping`
+- [x] Garantir que toda mensagem JSON contem `device_id`.
+  - Evidencia: payloads de status, sessao, realtime e batch incluem `device_id`.
+- [x] Garantir que mensagens de sessao contem `session_id`, `user_id`, `hand` e `mode`.
+  - Evidencia: payloads realtime e batch usam snapshot de sessao com esses campos.
+- [x] Para MVP, escolher uma estrategia de sessao:
+  - Comando MQTT `start_session` publicado pelo backend.
+  - Evidencia: firmware inicia idle, sem `setDefaultSession()`, e aceita `start_session`.
+- [x] Garantir que `hand` usa somente `left` ou `right`.
+  - Evidencia: `isValidHand` valida comandos e defaults usam `right`.
+- [x] Garantir que `mode` usa somente `buttons` ou `pressure`.
+  - Evidencia: `RehabMode` e `modeToString` limitam publicacoes a `buttons` ou `pressure`.
+- [x] Garantir que `timestamp_ms` representa tempo relativo do dispositivo em ms.
+  - Evidencia: firmware usa `millis()` nos payloads.
+- [x] Validar fase compilando com PlatformIO.
+  - Evidencia: `pio run` retornou `[SUCCESS] Took 29.46 seconds`.
+
+## Fase 11 - Firmware: FreeRTOS, botoes e HX710B
+
+- [x] Manter uso explicito de FreeRTOS tasks.
+  - Evidencia: tasks `mqtt`, `buttons`, `pressure`, `realtime` e `batch` criadas.
+- [x] Manter ou criar `button_event_queue` para eventos vindos das ISRs.
+  - Evidencia: `buttonEventQueue = xQueueCreate(...)`.
+- [x] Criar ou manter `pressure_queue` para leituras usadas no realtime.
+  - Evidencia: `pressureQueue = xQueueCreate(...)`.
+- [x] Criar `mqtt_publish_queue` para desacoplar tasks de publicacao MQTT.
+  - Evidencia: `mqttPublishQueue = xQueueCreate(...)` e realtime usa `enqueueMqtt`.
+- [x] Criar mutex/semaforo/event group para sincronizacao de MQTT e estado de conexao.
+  - Evidencia: `mqttMutex`, `bufferMutex`, `sessionMutex` e `systemEvents` criados.
+- [x] Implementar interrupcoes dos 4 botoes com `attachInterrupt`.
+  - Evidencia: quatro chamadas `attachInterrupt` em `setupFreeRtos`.
+- [x] Em ISR, enviar evento minimo por API segura para ISR:
+  - `button_id`
+  - `event_type`
+  - `timestamp_ms`
+- [x] Implementar debounce por software.
+  - Evidencia: `taskButtons` filtra eventos com `BUTTON_DEBOUNCE_MS`.
+- [x] Garantir que `button_id` publicado fica entre 1 e 4.
+  - Evidencia: ISR converte indice para `index + 1` e descarta indices fora de `BUTTON_COUNT`.
+- [x] Ler HX710B real e publicar `pressure_raw`.
+  - Evidencia: `readHx710bRaw` e payload realtime/batch incluem `pressure_raw`.
+- [x] Publicar `pressure_kpa` somente quando houver calibracao/fator disponivel.
+  - Evidencia: `PressureSample.has_pressure_kpa` controla `pressure_kpa`; fator/tara configurados no firmware.
+- [x] Manter funcao de tara/calibracao simples.
+  - Evidencia: `tarePressureSensor()` e comandos `tare/calibrate`.
+- [x] Evitar bloqueio indefinido quando HX710B falhar.
+  - Evidencia: `waitForHx710b` usa timeout e publica erro `hx710b_timeout`.
+- [x] Garantir que cada input faz duas coisas:
+  - Publica evento individual realtime.
+  - Copia dado para buffer de batch correspondente.
+  - Evidencia: `taskButtons` e `taskPressure` chamam realtime e `record*ForBatch`.
+- [x] Validar fase com `pio run`.
+  - Evidencia: `pio run` retornou sucesso.
+
+## Fase 12 - Firmware: Ring Buffer, estrategia ineficiente e batches
+
+- [x] Implementar estrutura ou classe Ring Buffer.
+  - Evidencia: `src/buffering/ring_buffer.h`.
+- [x] Garantir Ring Buffer com:
+  - capacidade fixa
+  - indices `head` e `tail`
+  - insercao O(1)
+  - remocao O(1)
+  - contador de drops quando cheio
+- [x] Criar buffer de batch para eventos de botoes.
+  - Evidencia: `buttonRingBuffer`.
+- [x] Criar buffer de batch para leituras de pressao.
+  - Evidencia: `pressureRingBuffer`.
+- [x] Implementar estrategia ineficiente comparativa:
+  - deslocamento de elementos, realocacao ou estrutura dinamica equivalente
+  - nao usar como padrao em producao
+  - deixar acessivel para experimento academico
+  - Evidencia: `src/buffering/inefficient_buffer.h` e instancias academicas no firmware.
+- [x] Medir latencia de insercao no buffer com `micros()`.
+  - Evidencia: `recordButtonForBatch` e `recordPressureForBatch`.
+- [x] Medir latencia de envio MQTT do batch.
+  - Evidencia: `publishMqttNow` mede latencia e armazena ultimo envio de batch.
+- [x] Medir heap livre com API do ESP32.
+  - Evidencia: payload `performance.free_heap_bytes` usa `ESP.getFreeHeap()`.
+- [x] Medir menor heap livre observado.
+  - Evidencia: payload `performance.min_free_heap_bytes` usa `ESP.getMinFreeHeap()`.
+- [x] Medir uso atual do buffer.
+  - Evidencia: payload `performance.buffer_used`.
+- [x] Medir quantidade de drops.
+  - Evidencia: `RingBuffer::dropped_samples()` entra no payload.
+- [x] Incluir metadados em `performance` dentro do payload batch.
+  - Evidencia: builders de batch incluem objeto `performance`.
+- [x] Implementar batch de botoes no formato:
+  - `device_id`
+  - `session_id`
+  - `user_id`
+  - `hand`
+  - `mode=buttons`
+  - `batch_id`
+  - `strategy`
+  - `sequence_start`
+  - `sequence_end`
+  - `created_at_ms`
+  - `performance`
+  - `events[]`
+- [x] Implementar batch de pressao no formato:
+  - `device_id`
+  - `session_id`
+  - `user_id`
+  - `hand`
+  - `mode=pressure`
+  - `batch_id`
+  - `strategy`
+  - `sequence_start`
+  - `sequence_end`
+  - `created_at_ms`
+  - `performance`
+  - `samples[]`
+- [x] Fazer flush do batch restante ao fim da sessao.
+  - Evidencia: `taskBatchPublish` drena buffers quando `end_session` chega.
+- [x] Garantir que batch nao bloqueia o fluxo realtime.
+  - Evidencia: realtime usa `mqttPublishQueue`; batch roda em task separada.
+- [x] Validar fase com `pio run` e logs serial, mesmo sem ESP32 real quando aplicavel.
+  - Evidencia: `pio run` compilou; teste fisico/log serial depende da ESP32 real.
+
+## Fase 13 - Testes manuais integrados sem ESP32
+
+- [x] Subir stack com `docker compose up --build`.
+  - Evidencia: `docker compose up --build -d` subiu os quatro containers.
+- [x] Verificar backend em `http://localhost:8000/health`.
+  - Evidencia: resposta `{"status":"ok"}`.
+- [x] Verificar Node-RED em `http://localhost:1880`.
+  - Evidencia: HTTP 200.
+- [x] Verificar frontend em `http://localhost:5173`.
+  - Evidencia: HTTP 200.
+- [x] Criar usuario via `POST /api/v1/users`.
+  - Evidencia: teste integrado criou usuario `4c8ba28f-a069-46df-8be7-2a7a8ced49d1`.
+- [x] Criar sessao `buttons` com `hand=right`.
+  - Evidencia: teste integrado criou sessao `003a97fa-0aca-45a2-9593-e29dd6c158d3`.
+- [x] Criar sessao `pressure` com `hand=left`.
+  - Evidencia: teste integrado criou sessao `1a928138-e914-4fa5-8bc2-dea545e595cf`.
+- [x] Publicar payload MQTT realtime de botoes em `rehab/devices/esp32-001/realtime/buttons`.
+  - Evidencia: publicado com cliente `paho-mqtt`.
+- [x] Verificar que Node-RED recebe e encaminha realtime de botoes.
+  - Evidencia: WebSocket `ws://localhost:1880/ws/realtime` recebeu payload com `source_topic` de botoes.
+- [x] Publicar payload MQTT realtime de pressao em `rehab/devices/esp32-001/realtime/pressure`.
+  - Evidencia: publicado com cliente `paho-mqtt`.
+- [x] Verificar que Node-RED recebe e encaminha realtime de pressao.
+  - Evidencia: WebSocket recebeu payload com `pressure_raw=84532` e `source_topic` de pressao.
+- [x] Publicar batch MQTT de botoes em `rehab/devices/esp32-001/batch/buttons`.
+  - Evidencia: publicado com cliente `paho-mqtt`.
+- [x] Verificar que Node-RED chama `POST /api/v1/ingest/batches/buttons`.
+  - Evidencia: metricas da sessao de botoes passaram a mostrar `batch_count=1`.
+- [x] Verificar que o backend persiste batch e eventos de botoes.
+  - Evidencia: metricas da sessao de botoes mostram `button_event_count=2`.
+- [x] Publicar batch MQTT de pressao em `rehab/devices/esp32-001/batch/pressure`.
+  - Evidencia: publicado com cliente `paho-mqtt`.
+- [x] Verificar que Node-RED chama `POST /api/v1/ingest/batches/pressure`.
+  - Evidencia: metricas da sessao de pressao passaram a mostrar `batch_count=1`.
+- [x] Verificar que o backend persiste batch e leituras de pressao.
+  - Evidencia: metricas da sessao de pressao mostram `pressure_reading_count=2`.
+- [x] Testar batch de botoes contra sessao `pressure` e confirmar que nao persiste eventos.
+  - Evidencia: apos batch incompativel, `button_event_count` da sessao de pressao permaneceu 0.
+- [x] Testar batch de pressao contra sessao `buttons` e confirmar que nao persiste leituras.
+  - Evidencia: apos batch incompativel, `pressure_reading_count` da sessao de botoes permaneceu 0.
+- [x] Consultar metricas por sessao.
+  - Evidencia: endpoints de metricas por sessao retornaram contagens, drops e latencias.
+- [x] Consultar metricas por usuario.
+  - Evidencia: endpoint de metricas do usuario retornou 2 sessoes, agrupamentos por modo/mao e totais.
+
+## Fase 14 - Teste fisico com ESP32
+
+Bloqueado: depende de ESP32 real, quatro botoes, HX710B conectado e credenciais Wi-Fi locais. A compilacao foi validada sem hardware.
+
+- [ ] Criar `secrets.h` local a partir de `secrets.example.h`.
+- [ ] Configurar Wi-Fi real.
+- [ ] Configurar `MQTT_HOST` como IP LAN da maquina que roda Docker.
+- [x] Compilar firmware com `pio run`.
+  - Evidencia: `pio run` retornou sucesso sem ESP32 conectado.
+- [ ] Fazer upload com `pio run --target upload`.
+- [ ] Abrir monitor serial com `pio device monitor`.
+- [ ] Confirmar conexao Wi-Fi.
+- [ ] Confirmar conexao MQTT com Aedes no Node-RED.
+- [ ] Pressionar cada um dos 4 botoes e verificar evento realtime individual.
+- [ ] Pressionar cada um dos 4 botoes e verificar entrada no batch de persistencia.
+- [ ] Ler HX710B e verificar `pressure_raw`.
+- [ ] Executar tara/calibracao simples.
+- [ ] Verificar batch de pressao.
+- [ ] Verificar flush de batch restante ao fim da sessao.
+- [ ] Registrar evidencias para a apresentacao: prints do Node-RED, logs serial e dados no banco.
+
+## Fase 15 - README e documentacao final
+
+- [x] Atualizar README com descricao curta do projeto.
+  - Evidencia: README substituido com descricao do Hand Rehab MVP.
+- [x] Explicar arquitetura resumida com dois fluxos.
+  - Evidencia: README documenta fluxo realtime e fluxo batch.
+- [x] Listar tecnologias usadas.
+  - Evidencia: README possui secao `Tecnologias`.
+- [x] Explicar como criar `.env` a partir de `.env.example`.
+  - Evidencia: README possui secao `Ambiente Docker`.
+- [x] Explicar como criar `secrets.h` a partir de `secrets.example.h`.
+  - Evidencia: README possui secao `Firmware ESP32`.
+- [x] Explicar como descobrir IP LAN do computador para `MQTT_HOST`.
+  - Evidencia: README menciona `ipconfig`, `ip addr` e `ifconfig`.
+- [x] Explicar como rodar `docker compose up --build`.
+  - Evidencia: README possui comando `docker compose up --build`.
+- [x] Listar URLs locais:
+  - Backend `http://localhost:8000/health`
+  - Node-RED `http://localhost:1880`
+  - MQTT `localhost:1883`
+  - Frontend `http://localhost:5173`
+  - Evidencia: README lista as quatro URLs.
+- [x] Explicar como importar ou validar `flows.json`.
+  - Evidencia: README documenta `applications/node-red/flows.json` e montagem no container.
+- [x] Explicar comandos PlatformIO:
+  - `pio run`
+  - `pio run --target upload`
+  - `pio device monitor`
+  - Evidencia: README lista os comandos PlatformIO.
+- [x] Incluir exemplo de payload MQTT realtime de botao.
+  - Evidencia: README inclui JSON de realtime de botao.
+- [x] Incluir exemplo de payload MQTT realtime de pressao.
+  - Evidencia: README inclui JSON de realtime de pressao.
+- [x] Incluir exemplo de payload MQTT batch de botoes.
+  - Evidencia: README inclui JSON de batch de botoes.
+- [x] Incluir exemplo de payload MQTT batch de pressao.
+  - Evidencia: README inclui JSON de batch de pressao.
+- [x] Documentar endpoints principais do backend.
+  - Evidencia: README possui secao `Endpoints principais`.
+- [x] Documentar limitacoes do MVP.
+  - Evidencia: README possui secao `Limitacoes do MVP`.
+- [x] Explicar integracao com Buffer Circular e comparacao academica.
+  - Evidencia: README possui secao `Buffer Circular`.
+- [x] Documentar que gameplay completo e dashboard funcional ficam fora deste ciclo.
+  - Evidencia: README lista gameplay e dashboard como fora do MVP.
+
+## Fase 16 - Criterios de aceite finais
+
+- [x] `docker compose up --build` sobe Postgres, backend, Node-RED e frontend base.
+  - Evidencia: `docker compose ps` mostra os quatro containers `Up`.
+- [x] Backend responde `GET /health`.
+  - Evidencia: `http://localhost:8000/health` retornou `{"status":"ok"}`.
+- [x] Node-RED abre em `http://localhost:1880`.
+  - Evidencia: HTTP 200.
+- [x] Aedes aceita conexao MQTT em `localhost:1883`.
+  - Evidencia: `Test-NetConnection` retornou `TcpTestSucceeded=True` e publicacoes MQTT integradas funcionaram.
+- [x] Frontend base abre em `http://localhost:5173`.
+  - Evidencia: HTTP 200.
+- [x] `applications/node-red/flows.json` existe e e importavel.
+  - Evidencia: `ConvertFrom-Json` validou 22 nos.
+- [x] Node-RED recebe mensagens MQTT realtime.
+  - Evidencia: teste integrado publicou realtime de botoes e pressao.
+- [x] Node-RED encaminha realtime ao frontend por WebSocket ou mecanismo equivalente.
+  - Evidencia: WebSocket `ws://localhost:1880/ws/realtime` recebeu os dois payloads.
+- [x] Node-RED recebe mensagens MQTT batch.
+  - Evidencia: teste integrado publicou batches de botoes e pressao.
+- [x] Node-RED encaminha batches ao backend.
+  - Evidencia: metricas do backend refletiram batches publicados por MQTT.
+- [x] Backend conecta ao Postgres.
+  - Evidencia: container backend executou migrations e endpoints persistiram dados.
+- [x] Migrations funcionam.
+  - Evidencia: `psql \dt` mostrou `alembic_version` e tabelas do dominio.
+- [x] Backend cria e consulta usuarios.
+  - Evidencia: pytest e teste integrado criaram/consultaram usuarios.
+- [x] Backend cria sessoes vinculadas a usuarios.
+  - Evidencia: teste integrado criou sessoes com `user_id`.
+- [x] Backend aceita sessoes com `hand=left` e `hand=right`.
+  - Evidencia: teste integrado criou sessoes `left` e `right`.
+- [x] Backend aceita sessoes com `mode=buttons` e `mode=pressure`.
+  - Evidencia: teste integrado criou sessoes `buttons` e `pressure`.
+- [x] Sessoes iniciam com `duration_seconds=null` e recebem duracao real ao finalizar.
+  - Evidencia: pytest e smoke integrado validaram `duration_seconds=null` no start e inteiro no finish.
+- [x] Backend recebe e persiste batch de botoes compativel.
+  - Evidencia: metricas mostram `button_event_count=2`.
+- [x] Backend recebe e persiste batch de pressao compativel.
+  - Evidencia: metricas mostram `pressure_reading_count=2`.
+- [x] Backend nao persiste dados incompativeis com o modo da sessao.
+  - Evidencia: testes incompativeis mantiveram contagens zeradas no modo oposto.
+- [x] Backend retorna metricas por sessao.
+  - Evidencia: endpoints `/metrics/sessions/.../summary` consultados no teste integrado.
+- [x] Backend retorna metricas por usuario.
+  - Evidencia: endpoint `/metrics/users/.../summary` consultado no teste integrado.
+- [x] Banco contem tabelas `users`, `devices`, `game_sessions`, `telemetry_batches`, `batch_performance_metadata`, `button_events` e `pressure_readings`.
+  - Evidencia: `docker exec handrehab-postgres psql ... -c "\dt"` listou essas tabelas.
+- [x] Firmware PlatformIO compila.
+  - Evidencia: `pio run` retornou sucesso.
+- [x] Firmware usa Arduino Framework.
+  - Evidencia: `platformio.ini` contem `framework = arduino`.
+- [x] Firmware usa FreeRTOS tasks, filas, interrupcoes e mutex/semaforo/event group.
+  - Evidencia: `main.cpp` cria tasks, queues, interrupts, mutexes e event group.
+- [x] Firmware le 4 botoes fisicos.
+  - Evidencia: quatro pinos em `BUTTON_PINS` com `attachInterrupt`; teste fisico fica na Fase 14.
+- [x] Firmware le HX710B real.
+  - Evidencia: driver de leitura HX710B em `readHx710bRaw`; teste fisico fica na Fase 14.
+- [x] Firmware publica eventos realtime via MQTT.
+  - Evidencia: payloads realtime usam topicos oficiais e `enqueueMqtt`.
+- [x] Firmware prepara batches no proprio firmware.
+  - Evidencia: builders `buildButtonBatchPayload` e `buildPressureBatchPayload`.
+- [x] Firmware publica batches via MQTT.
+  - Evidencia: `publishButtonBatchIfAvailable` e `publishPressureBatchIfAvailable`.
+- [x] Firmware implementa Ring Buffer.
+  - Evidencia: `src/buffering/ring_buffer.h`.
+- [x] Firmware implementa estrategia ineficiente comparativa.
+  - Evidencia: `src/buffering/inefficient_buffer.h`.
+- [x] Firmware mede latencia e heap.
+  - Evidencia: payload `performance` usa `micros()`, `ESP.getFreeHeap()` e `ESP.getMinFreeHeap()`.
+- [x] Firmware envia metadados de desempenho no batch.
+  - Evidencia: `performance` incluido nos builders de batch.
+- [x] Firmware faz flush do batch restante ao fim da sessao.
+  - Evidencia: `taskBatchPublish` drena buffers ao receber comando `end_session`.
+- [x] Frontend React + Tailwind existe.
+  - Evidencia: build Vite/Tailwind passou.
+- [x] Frontend tem Dockerfile.
+  - Evidencia: `applications/frontend/Dockerfile`.
+- [x] Frontend tem estrutura preparada para realtime futuro.
+  - Evidencia: `src/realtime/types.ts` e `src/realtime/nodeRedClient.ts`.
+- [x] Nao ha implementacao desnecessaria de dashboard completa.
+  - Evidencia: frontend contem apenas placeholder.
+- [x] Nao ha implementacao desnecessaria de jogo completo.
+  - Evidencia: frontend contem apenas placeholder.
+
+## Fase 17 - Entregaveis academicos de apoio
+
+Adiado: os artefatos de perfilamento real, comparativo em microssegundos e instabilidade de rede exigem execucoes fisicas ou testes de estresse com dados reais. As evidencias do smoke test e notas tecnicas foram registradas.
+
+- [x] Guardar prints, logs e comprovacoes de execucao em `entregas/evidencias/`.
+  - Evidencia: `entregas/evidencias/mvp-smoke-test.md`.
+- [x] Guardar graficos de dados recebidos em lote via MQTT em `entregas/graficos/`.
+  - Evidencia: `entregas/graficos/batch-mqtt-smoke-test.csv`.
+- [ ] Guardar comparativo de latencia em microssegundos entre estrategia ineficiente e Ring Buffer em `entregas/graficos/`.
+  - Adiado: comparativo em microssegundos exige coleta fisica ou benchmark dedicado na ESP32.
+- [ ] Guardar dados brutos de latencia, heap, drops e testes de estresse em `entregas/perfilamento/`.
+  - Adiado: dados brutos de estresse dependem de execucao fisica/estresse de rede.
+- [ ] Registrar impacto de memoria/heap de cada estrategia em `entregas/perfilamento/`.
+  - Adiado: impacto real de heap por estrategia depende de coleta na ESP32.
+- [ ] Registrar comportamento sob gargalo ou instabilidade de rede em `entregas/perfilamento/`.
+  - Adiado: requer cenario controlado de instabilidade de rede.
+- [x] Preparar notas para relatorio tecnico em `entregas/relatorio/` com:
+  - analise assintotica
+  - diagnostico de memoria
+  - discussao sobre produtor-consumidor e rede
+  - Evidencia: `entregas/relatorio/notas-tecnicas-mvp.md`.
+- [x] Garantir que o README e os docs suportam avaliacao de organizacao do GitHub.
+  - Evidencia: README e `docs/` documentam arquitetura, topicos, API e buffer.
+
+## Backlog fora do MVP
+
+- [ ] Gameplay completo no frontend.
+- [ ] Dashboard historica funcional.
+- [ ] Autenticacao.
+- [ ] Cadastro avancado de pacientes.
+- [ ] Cadastro de fisioterapeutas.
+- [ ] Regras clinicas avancadas.
+- [ ] Deploy em nuvem.
+- [ ] Aplicativo mobile.
+- [ ] Relatorios finais automatizados.
+- [ ] Algoritmos de recomendacao terapeutica.
+- [ ] Validacao clinica.

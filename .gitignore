@@ -1,1 +1,8 @@
 .env
+esp32-esp8266/hand-rehab/include/secrets.h
+node_modules/
+dist/
+*.tsbuildinfo
+*.egg-info/
+__pycache__/
+.pytest_cache/

@@ -1,13 +1,10 @@
 FROM nodered/node-red:3.1.15-18
 
-WORKDIR /data
-
-# Flow de ingestao de dados da ESP32.
 ENV FLOWS=flows.json
 
-COPY hand-rehab-flow.json /data/flows.json
+COPY package.json /data/package.json
+RUN cd /data && npm install --unsafe-perm --no-update-notifier --no-fund --omit=dev
 
-# Broker MQTT via Aedes dentro do Node-RED.
-RUN npm install --unsafe-perm --no-update-notifier --no-fund node-red-contrib-aedes
+COPY flows.json /data/flows.json
 
 EXPOSE 1880 1883

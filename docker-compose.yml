@@ -1,6 +1,43 @@
-version: "3.9"
-
 services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: handrehab-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-rehab_game}
+      POSTGRES_USER: ${POSTGRES_USER:-rehab_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-rehab_password}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - handrehab
+
+  backend:
+    build:
+      context: ./applications/backend
+      dockerfile: Dockerfile
+    container_name: handrehab-backend
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://rehab_user:rehab_password@postgres:5432/rehab_game}
+      MQTT_HOST: ${MQTT_HOST:-node-red}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      DEFAULT_DEVICE_ID: ${DEFAULT_DEVICE_ID:-esp32-001}
+    ports:
+      - "${BACKEND_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    networks:
+      - handrehab
+
   node-red:
     build:
       context: ./applications/node-red
@@ -8,14 +45,36 @@ services:
     container_name: handrehab-node-red
     restart: unless-stopped
     ports:
-      - "1880:1880"
-      - "1883:1883"
+      - "${NODE_RED_PORT:-1880}:1880"
+      - "${MQTT_PORT:-1883}:1883"
     environment:
-      MQTT_PORT: "1883"
-      NODE_RED_MQTT_BROKER: "127.0.0.1"
-      NODE_RED_CLIENT_ID: node-red-hand-rehab
+      BACKEND_URL: ${BACKEND_URL:-http://backend:8000}
+      MQTT_PORT: ${MQTT_PORT:-1883}
+      NODE_RED_MQTT_BROKER: ${NODE_RED_MQTT_BROKER:-127.0.0.1}
+      NODE_RED_CLIENT_ID: ${NODE_RED_CLIENT_ID:-node-red-hand-rehab}
     volumes:
-      - nodered_data:/data
+      - ./applications/node-red/flows.json:/data/flows.json:ro
+    depends_on:
+      - backend
+    networks:
+      - handrehab
+
+  frontend:
+    build:
+      context: ./applications/frontend
+      dockerfile: Dockerfile
+    container_name: handrehab-frontend
+    restart: unless-stopped
+    ports:
+      - "${FRONTEND_PORT:-5173}:5173"
+    depends_on:
+      - node-red
+    networks:
+      - handrehab
 
 volumes:
-  nodered_data:
+  postgres_data:
+
+networks:
+  handrehab:
+    driver: bridge

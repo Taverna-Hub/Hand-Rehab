@@ -2,8 +2,8 @@
 
 // Modulo HX710B com pinos GND, SCK, OUT e VCC.
 // OUT do modulo e o sinal de dados do ADC.
-static const uint8_t HX710B_OUT_PIN = 32;
-static const uint8_t HX710B_SCK_PIN = 33;
+static const uint8_t HX710B_OUT_PIN = 15;
+static const uint8_t HX710B_SCK_PIN = 2;
 
 static const uint8_t SAMPLE_COUNT = 3;
 static const uint8_t HX710B_TOTAL_CLOCK_PULSES = 27;
@@ -143,7 +143,7 @@ void setup() {
   Serial.println();
   Serial.println("MPS20N0040D + HX710B - teste serial");
   Serial.printf("OUT: GPIO %u | SCK: GPIO %u\n", HX710B_OUT_PIN, HX710B_SCK_PIN);
-  Serial.println("Ligacao: GND->GND, SCK->GPIO33, OUT->GPIO32, VCC->3V3");
+  Serial.println("Ligacao: GND->GND, SCK->D2/GPIO2, OUT->D15/GPIO15, VCC->3V3");
   Serial.println("Modo HX710B: entrada diferencial, 40 Hz, 27 pulsos");
 
   printPinDiagnostics();
