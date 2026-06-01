@@ -30,9 +30,9 @@ def main() -> None:
     parser.add_argument("--zero-offset", required=True, type=int, help="Valor PRESSURE_ZERO_OFFSET_RAW impresso pela calibracao.")
     parser.add_argument(
         "--counts-per-kpa",
-        required=True,
+        default=10000.0,
         type=float,
-        help="Valor RAW_COUNTS_PER_KPA impresso pela calibracao.",
+        help="Valor RAW_COUNTS_PER_KPA. Padrao: 10000.0.",
     )
     args = parser.parse_args()
 
