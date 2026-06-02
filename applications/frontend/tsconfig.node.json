@@ -3,6 +3,8 @@
     "composite": true,
     "module": "ESNext",
     "moduleResolution": "Bundler",
+    "outDir": "node_modules/.cache/tsconfig-node",
+    "tsBuildInfoFile": "node_modules/.cache/tsconfig-node/tsconfig.node.tsbuildinfo",
     "allowSyntheticDefaultImports": true,
     "types": ["node"]
   },

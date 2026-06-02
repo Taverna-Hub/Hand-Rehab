@@ -31,7 +31,7 @@ ESP32 -> batch MQTT -> Node-RED -> FastAPI Backend -> Postgres
 Controle de sessao:
 
 ```text
-Postman/frontend futuro -> Backend -> MQTT start/end -> ESP32
+Frontend -> Backend -> MQTT start/end -> ESP32
 ESP32 -> MQTT ACK de sessao -> Node-RED -> WebSocket
 ```
 
@@ -63,6 +63,8 @@ MQTT_PORT=1883
 MQTT_HOST=node-red
 DEFAULT_DEVICE_ID=esp32-001
 FRONTEND_PORT=5173
+VITE_BACKEND_API_URL=http://localhost:8000
+VITE_NODE_RED_WS_URL=ws://localhost:1880/ws/realtime
 ```
 
 Suba a stack:
@@ -77,6 +79,8 @@ URLs locais:
 - Node-RED: `http://localhost:1880`
 - MQTT Aedes: `localhost:1883`
 - Frontend: `http://localhost:5173`
+
+O frontend usa `VITE_BACKEND_API_URL` para chamadas REST e `VITE_NODE_RED_WS_URL` para realtime. Se essas variaveis forem omitidas, ele usa `http://<host>:8000` e `ws://<host>:1880/ws/realtime`.
 
 Validar a configuracao do Compose:
 
@@ -93,6 +97,13 @@ applications/node-red/flows.json
 ```
 
 O container monta esse arquivo em `/data/flows.json`. Ele cria o broker Aedes na porta `1883`, recebe os topicos MQTT oficiais, encaminha realtime para `ws://localhost:1880/ws/realtime` e envia batches para o backend usando `BACKEND_URL`.
+
+## Frontend
+
+O frontend em `applications/frontend/` tem uma tela de jogo em React + Tailwind. A tela lista/cria pacientes, escolhe mao esquerda/direita, inicia/finaliza sessao pelo backend e recebe inputs em tempo real pelo WebSocket do Node-RED.
+
+- Modo `1 faixa`: usa sessao `mode="pressure"` e acerto por limiar de pressao.
+- Modo `4 faixas`: usa sessao `mode="buttons"` e mapeia botoes 1..4 para azul, vermelho, verde e amarelo.
 
 ## Firmware ESP32
 
@@ -295,10 +306,9 @@ Cada batch inclui `performance` com latencia de insercao, latencia de envio MQTT
 
 ## Limitacoes do MVP
 
-- Sem gameplay completo.
+- Gameplay simples gerado no cliente, sem audio ou musicas.
 - Sem dashboard historica funcional.
 - Sem autenticacao.
 - Sem regras clinicas avancadas.
 - Sem sessao fixa no firmware: a ESP32 inicia idle e aguarda `start_session`.
-- Frontend permanece minimo; inicio/fim de sessao podem ser testados via Postman.
 - Teste fisico depende de ESP32, botoes e HX710B conectados.

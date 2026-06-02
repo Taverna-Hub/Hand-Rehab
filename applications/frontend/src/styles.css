@@ -4,9 +4,30 @@
 
 :root {
   font-family: Inter, ui-sans-serif, system-ui, sans-serif;
-  background: #fafaf9;
+  background: #f4f7fb;
 }
 
 body {
   margin: 0;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+.rhythm-track {
+  border-radius: 8px;
+  clip-path: polygon(18% 0, 82% 0, 100% 100%, 0 100%);
+}
+
+@media (max-width: 640px) {
+  .rhythm-track {
+    clip-path: polygon(8% 0, 92% 0, 100% 100%, 0 100%);
+  }
 }
