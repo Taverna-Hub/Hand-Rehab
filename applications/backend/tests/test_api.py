@@ -496,3 +496,207 @@ async def test_users_and_sessions_are_documented_in_openapi(client):
     assert paths["/api/v1/game-sessions/active"]["get"]["summary"] == "Listar sessoes ativas"
     assert "409" in paths["/api/v1/game-sessions/start"]["post"]["responses"]
     assert "409" in paths["/api/v1/game-sessions/{session_id}/finish"]["patch"]["responses"]
+
+
+@pytest.mark.anyio
+async def test_start_benchmark_publishes_mqtt_command(client, mqtt_publisher):
+    response = await client.post("/api/v1/benchmarks/runs", json={})
+
+    assert response.status_code == 201, response.text
+    run = response.json()
+    assert run["status"] == "running"
+    assert run["device_id"] == "esp32-001"
+    assert run["sample_counts"] == [100, 5000, 20000]
+    assert run["strategies"] == ["ring_buffer", "inefficient_shift_buffer"]
+    assert run["expected_results"] == 6
+    assert mqtt_publisher.messages == [
+        {
+            "topic": "rehab/devices/esp32-001/commands/start_benchmark",
+            "payload": {
+                "run_id": run["id"],
+                "sample_counts": [100, 5000, 20000],
+                "iterations": 100,
+                "strategies": ["ring_buffer", "inefficient_shift_buffer"],
+                "operation": "sliding_insert",
+            },
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_benchmark_rejects_active_game_session(client):
+    user = await create_user(client)
+    await create_session(client, user["id"], mode="buttons", hand="right")
+
+    response = await client.post("/api/v1/benchmarks/runs", json={})
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "active_session_exists"}
+
+
+@pytest.mark.anyio
+async def test_benchmark_rejects_second_active_benchmark_until_cancelled(client):
+    first = await client.post("/api/v1/benchmarks/runs", json={})
+    second = await client.post("/api/v1/benchmarks/runs", json={})
+
+    assert first.status_code == 201, first.text
+    assert second.status_code == 409
+    assert second.json() == {"detail": "active_benchmark_exists"}
+
+    cancel = await client.patch(
+        "/api/v1/benchmarks/runs/active/cancel",
+        json={"reason": "esp_not_connected"},
+    )
+    replacement = await client.post("/api/v1/benchmarks/runs", json={})
+
+    assert cancel.status_code == 200, cancel.text
+    assert cancel.json()["status"] == "cancelled"
+    assert cancel.json()["error"] == "esp_not_connected"
+    assert cancel.json()["finished_at"] is not None
+    assert replacement.status_code == 201, replacement.text
+
+
+@pytest.mark.anyio
+async def test_cancel_benchmark_by_id_requires_running_run(client):
+    run_response = await client.post("/api/v1/benchmarks/runs", json={})
+    run = run_response.json()
+
+    first = await client.patch(f"/api/v1/benchmarks/runs/{run['id']}/cancel", json={})
+    second = await client.patch(f"/api/v1/benchmarks/runs/{run['id']}/cancel", json={})
+
+    assert first.status_code == 200, first.text
+    assert first.json()["status"] == "cancelled"
+    assert second.status_code == 409
+    assert second.json() == {"detail": "benchmark_not_running"}
+
+
+@pytest.mark.anyio
+async def test_benchmark_results_are_idempotent_and_complete_run(client):
+    run_response = await client.post("/api/v1/benchmarks/runs", json={})
+    run = run_response.json()
+
+    first_payload = {
+        "run_id": run["id"],
+        "device_id": "esp32-001",
+        "strategy": "ring_buffer",
+        "sample_count": 100,
+        "iterations": 100,
+        "operation": "sliding_insert",
+        "duration_total_us": 1200,
+        "latency_us_avg": 12.5,
+        "latency_us_max": 25,
+        "free_heap_before_bytes": 185000,
+        "free_heap_after_bytes": 184900,
+        "min_free_heap_bytes": 184700,
+        "dropped_samples": 0,
+        "timestamp_ms": 123456,
+    }
+    first = await client.post("/api/v1/benchmarks/results", json=first_payload)
+    duplicate = await client.post("/api/v1/benchmarks/results", json=first_payload)
+
+    assert first.status_code == 200, first.text
+    assert duplicate.status_code == 200, duplicate.text
+    assert first.json()["persisted_results"] == 1
+    assert duplicate.json()["benchmark_result_id"] == first.json()["benchmark_result_id"]
+    assert duplicate.json()["persisted_results"] == 1
+
+    for strategy in ["ring_buffer", "inefficient_shift_buffer"]:
+        for sample_count in [100, 5000, 20000]:
+            payload = {
+                **first_payload,
+                "strategy": strategy,
+                "sample_count": sample_count,
+                "duration_total_us": sample_count + (1 if strategy == "ring_buffer" else 10),
+                "latency_us_avg": 4.5 if strategy == "ring_buffer" else 40.5,
+                "latency_us_max": 9 if strategy == "ring_buffer" else 90,
+            }
+            response = await client.post("/api/v1/benchmarks/results", json=payload)
+            assert response.status_code == 200, response.text
+
+    fetched = await client.get(f"/api/v1/benchmarks/runs/{run['id']}")
+    assert fetched.status_code == 200, fetched.text
+    payload = fetched.json()
+    assert payload["status"] == "completed"
+    assert payload["finished_at"] is not None
+    assert len(payload["results"]) == 6
+    assert isinstance(payload["results"][0]["latency_us_avg"], float)
+
+
+@pytest.mark.anyio
+async def test_benchmark_completed_status_before_last_results_is_reconciled(client):
+    run_response = await client.post("/api/v1/benchmarks/runs", json={})
+    run = run_response.json()
+
+    def result_payload(strategy: str, sample_count: int) -> dict:
+        return {
+            "run_id": run["id"],
+            "device_id": "esp32-001",
+            "strategy": strategy,
+            "sample_count": sample_count,
+            "iterations": 100,
+            "operation": "sliding_insert",
+            "duration_total_us": sample_count,
+            "latency_us_avg": 4.5 if strategy == "ring_buffer" else 40.5,
+            "latency_us_max": 9 if strategy == "ring_buffer" else 90,
+            "free_heap_before_bytes": 185000,
+            "free_heap_after_bytes": 184900,
+            "min_free_heap_bytes": 184700,
+            "dropped_samples": 0,
+            "timestamp_ms": 123456,
+        }
+
+    for strategy, sample_count in [
+        ("ring_buffer", 100),
+        ("inefficient_shift_buffer", 100),
+        ("ring_buffer", 5000),
+        ("inefficient_shift_buffer", 5000),
+    ]:
+        response = await client.post("/api/v1/benchmarks/results", json=result_payload(strategy, sample_count))
+        assert response.status_code == 200, response.text
+
+    completed_status = await client.post(
+        "/api/v1/benchmarks/status",
+        json={
+            "run_id": run["id"],
+            "device_id": "esp32-001",
+            "status": "completed",
+            "timestamp_ms": 123,
+        },
+    )
+    assert completed_status.status_code == 200, completed_status.text
+    assert completed_status.json()["run_status"] == "running"
+
+    for strategy in ["ring_buffer", "inefficient_shift_buffer"]:
+        response = await client.post("/api/v1/benchmarks/results", json=result_payload(strategy, 20000))
+        assert response.status_code == 200, response.text
+
+    fetched = await client.get(f"/api/v1/benchmarks/runs/{run['id']}")
+    assert fetched.status_code == 200, fetched.text
+    payload = fetched.json()
+    assert payload["status"] == "completed"
+    assert payload["last_status"] == "completed"
+    assert payload["finished_at"] is not None
+    assert len(payload["results"]) == 6
+
+
+@pytest.mark.anyio
+async def test_benchmark_status_can_fail_run(client):
+    run_response = await client.post("/api/v1/benchmarks/runs", json={})
+    run = run_response.json()
+
+    response = await client.post(
+        "/api/v1/benchmarks/status",
+        json={
+            "run_id": run["id"],
+            "device_id": "esp32-001",
+            "status": "busy",
+            "error": "benchmark_requires_idle_device",
+            "timestamp_ms": 123,
+        },
+    )
+    fetched = await client.get(f"/api/v1/benchmarks/runs/{run['id']}")
+
+    assert response.status_code == 200, response.text
+    assert response.json()["run_status"] == "failed"
+    assert fetched.json()["status"] == "failed"
+    assert fetched.json()["error"] == "benchmark_requires_idle_device"

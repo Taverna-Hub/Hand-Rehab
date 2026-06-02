@@ -33,6 +33,14 @@ class FakeMqttPublisher:
             }
         )
 
+    async def publish_start_benchmark(self, device_id: str, payload: dict) -> None:
+        self.messages.append(
+            {
+                "topic": f"rehab/devices/{device_id}/commands/start_benchmark",
+                "payload": payload,
+            }
+        )
+
 
 @pytest.fixture
 def mqtt_publisher() -> FakeMqttPublisher:

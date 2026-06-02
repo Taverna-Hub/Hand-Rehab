@@ -35,6 +35,11 @@ class InefficientShiftBuffer {
   size_t capacity() const { return Capacity; }
   uint32_t dropped_samples() const { return dropped_samples_; }
 
+  void clear() {
+    count_ = 0;
+    dropped_samples_ = 0;
+  }
+
  private:
   T data_[Capacity];
   size_t count_ = 0;

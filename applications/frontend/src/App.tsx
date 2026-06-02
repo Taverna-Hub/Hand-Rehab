@@ -13,6 +13,7 @@ import {
   type Sex,
   type UserRead,
 } from "./api/backendClient";
+import { BenchmarkDashboard } from "./BenchmarkDashboard";
 import { createNodeRedRealtimeClient, type RealtimeConnectionStatus } from "./realtime/nodeRedClient";
 import type {
   GameMode,
@@ -38,7 +39,7 @@ const FOUR_LANE_PATTERN = [1, 2, 3, 4, 2, 4, 1, 3, 1, 4, 2, 3];
 type NoteStatus = "pending" | "hit" | "miss";
 type HitQuality = "perfect" | "good";
 type FeedbackTone = "hit" | "miss" | "neutral";
-type AppScreen = "setup" | "dashboard";
+type AppScreen = "setup" | "dashboard" | "benchmarks";
 
 interface LaneDefinition {
   id: number;
@@ -740,6 +741,14 @@ export default function App() {
                 className="h-10 rounded-lg border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
                 disabled={apiBusy}
                 type="button"
+                onClick={() => setScreen("benchmarks")}
+              >
+                Metricas de Buffer
+              </button>
+              <button
+                className="h-10 rounded-lg border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={apiBusy}
+                type="button"
                 onClick={() => setScreen("setup")}
               >
                 Configurar sessao
@@ -850,6 +859,10 @@ export default function App() {
     );
   }
 
+  if (!activeSession && screen === "benchmarks") {
+    return <BenchmarkDashboard onBack={() => setScreen("setup")} />;
+  }
+
   if (!activeSession) {
     return (
       <main className="min-h-screen bg-[#f4f7fb] px-4 py-5 text-slate-900">
@@ -872,6 +885,13 @@ export default function App() {
                       onClick={() => setScreen("dashboard")}
                     >
                       Dashboard
+                    </button>
+                    <button
+                      className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 transition hover:border-slate-500"
+                      type="button"
+                      onClick={() => setScreen("benchmarks")}
+                    >
+                      Metricas
                     </button>
                   </div>
                 </div>

@@ -459,6 +459,172 @@
     "wires": []
   },
   {
+    "id": "mqtt-benchmark-results",
+    "type": "mqtt in",
+    "z": "handrehab-flow",
+    "name": "benchmark results",
+    "topic": "rehab/devices/+/benchmark/results",
+    "qos": "0",
+    "datatype": "auto",
+    "broker": "mqtt-local",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 540,
+    "wires": [
+      [
+        "fn-normalize-benchmark-result"
+      ]
+    ]
+  },
+  {
+    "id": "fn-normalize-benchmark-result",
+    "type": "function",
+    "z": "handrehab-flow",
+    "name": "normalize_benchmark_result",
+    "func": "let data = msg.payload;\nconst sourceTopic = msg.topic;\nif (Buffer.isBuffer(data)) data = data.toString();\nif (typeof data === 'string') {\n    try { data = JSON.parse(data); } catch (error) {\n        return [null, { payload: { error: 'invalid_json', source_topic: sourceTopic, raw_payload: data } }];\n    }\n}\nif (!data || typeof data !== 'object') {\n    return [null, { payload: { error: 'invalid_payload', source_topic: sourceTopic, raw_payload: data } }];\n}\nconst required = ['run_id', 'device_id', 'strategy', 'sample_count', 'iterations', 'operation', 'duration_total_us', 'latency_us_avg', 'latency_us_max'];\nconst missing = required.filter((key) => data[key] === undefined || data[key] === null);\nif (missing.length) {\n    return [null, { payload: { error: 'missing_fields', missing, source_topic: sourceTopic, raw_payload: data } }];\n}\nmsg.payload = { ...data, source_topic: sourceTopic };\nmsg.method = 'POST';\nmsg.url = env.get('BACKEND_URL') + '/api/v1/benchmarks/results';\nmsg.headers = { 'Content-Type': 'application/json' };\nreturn [msg, null];",
+    "outputs": 2,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 440,
+    "y": 540,
+    "wires": [
+      [
+        "http-post-benchmark-result"
+      ],
+      [
+        "debug-invalid-payload"
+      ]
+    ]
+  },
+  {
+    "id": "http-post-benchmark-result",
+    "type": "http request",
+    "z": "handrehab-flow",
+    "name": "POST benchmark result",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 720,
+    "y": 540,
+    "wires": [
+      [
+        "debug-benchmark-result-response"
+      ]
+    ]
+  },
+  {
+    "id": "debug-benchmark-result-response",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug benchmark result response",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1010,
+    "y": 540,
+    "wires": []
+  },
+  {
+    "id": "mqtt-benchmark-status",
+    "type": "mqtt in",
+    "z": "handrehab-flow",
+    "name": "benchmark status",
+    "topic": "rehab/devices/+/benchmark/status",
+    "qos": "0",
+    "datatype": "auto",
+    "broker": "mqtt-local",
+    "nl": false,
+    "rap": true,
+    "rh": 0,
+    "inputs": 0,
+    "x": 160,
+    "y": 620,
+    "wires": [
+      [
+        "fn-normalize-benchmark-status"
+      ]
+    ]
+  },
+  {
+    "id": "fn-normalize-benchmark-status",
+    "type": "function",
+    "z": "handrehab-flow",
+    "name": "normalize_benchmark_status",
+    "func": "let data = msg.payload;\nconst sourceTopic = msg.topic;\nif (Buffer.isBuffer(data)) data = data.toString();\nif (typeof data === 'string') {\n    try { data = JSON.parse(data); } catch (error) {\n        return [null, { payload: { error: 'invalid_json', source_topic: sourceTopic, raw_payload: data } }];\n    }\n}\nif (!data || typeof data !== 'object') {\n    return [null, { payload: { error: 'invalid_payload', source_topic: sourceTopic, raw_payload: data } }];\n}\nconst required = ['run_id', 'device_id', 'status'];\nconst missing = required.filter((key) => data[key] === undefined || data[key] === null);\nif (missing.length) {\n    return [null, { payload: { error: 'missing_fields', missing, source_topic: sourceTopic, raw_payload: data } }];\n}\nmsg.payload = { ...data, source_topic: sourceTopic };\nmsg.method = 'POST';\nmsg.url = env.get('BACKEND_URL') + '/api/v1/benchmarks/status';\nmsg.headers = { 'Content-Type': 'application/json' };\nreturn [msg, null];",
+    "outputs": 2,
+    "noerr": 0,
+    "initialize": "",
+    "finalize": "",
+    "libs": [],
+    "x": 440,
+    "y": 620,
+    "wires": [
+      [
+        "http-post-benchmark-status"
+      ],
+      [
+        "debug-invalid-payload"
+      ]
+    ]
+  },
+  {
+    "id": "http-post-benchmark-status",
+    "type": "http request",
+    "z": "handrehab-flow",
+    "name": "POST benchmark status",
+    "method": "use",
+    "ret": "obj",
+    "paytoqs": "ignore",
+    "url": "",
+    "tls": "",
+    "persist": false,
+    "proxy": "",
+    "authType": "",
+    "senderr": false,
+    "headers": [],
+    "x": 720,
+    "y": 620,
+    "wires": [
+      [
+        "debug-benchmark-status-response"
+      ]
+    ]
+  },
+  {
+    "id": "debug-benchmark-status-response",
+    "type": "debug",
+    "z": "handrehab-flow",
+    "name": "debug benchmark status response",
+    "active": true,
+    "tosidebar": true,
+    "console": false,
+    "tostatus": false,
+    "complete": "payload",
+    "targetType": "msg",
+    "statusVal": "",
+    "statusType": "auto",
+    "x": 1010,
+    "y": 620,
+    "wires": []
+  },
+  {
     "id": "debug-invalid-payload",
     "type": "debug",
     "z": "handrehab-flow",
@@ -472,7 +638,7 @@
     "statusVal": "",
     "statusType": "auto",
     "x": 730,
-    "y": 560,
+    "y": 700,
     "wires": []
   }
 ]

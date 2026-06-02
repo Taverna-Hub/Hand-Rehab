@@ -49,6 +49,62 @@ class Device(TimestampMixin, Base):
     last_seen_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
 
     sessions: Mapped[list["GameSession"]] = relationship(back_populates="device")
+    benchmark_runs: Mapped[list["BenchmarkRun"]] = relationship(back_populates="device")
+
+
+class BenchmarkRun(TimestampMixin, Base):
+    __tablename__ = "benchmark_runs"
+    __table_args__ = (
+        CheckConstraint("iterations > 0", name="ck_benchmark_runs_iterations_positive"),
+        CheckConstraint("expected_results > 0", name="ck_benchmark_runs_expected_results_positive"),
+        CheckConstraint("status in ('running','completed','failed','cancelled')", name="ck_benchmark_runs_status"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), nullable=False)
+    status: Mapped[str] = mapped_column(String(20), default="running", nullable=False)
+    sample_counts: Mapped[str] = mapped_column(Text, nullable=False)
+    strategies: Mapped[str] = mapped_column(Text, nullable=False)
+    iterations: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(String(40), nullable=False)
+    expected_results: Mapped[int] = mapped_column(Integer, nullable=False)
+    started_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    last_status: Mapped[str | None] = mapped_column(String(40), nullable=True)
+    error: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    device: Mapped[Device] = relationship(back_populates="benchmark_runs")
+    results: Mapped[list["BenchmarkResult"]] = relationship(back_populates="run")
+
+
+class BenchmarkResult(Base):
+    __tablename__ = "benchmark_results"
+    __table_args__ = (
+        UniqueConstraint("run_id", "strategy", "sample_count", "operation", name="uq_benchmark_results_run_strategy_n_operation"),
+        CheckConstraint("sample_count > 0", name="ck_benchmark_results_sample_count_positive"),
+        CheckConstraint("iterations > 0", name="ck_benchmark_results_iterations_positive"),
+        CheckConstraint("strategy in ('ring_buffer','inefficient_shift_buffer')", name="ck_benchmark_results_strategy"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    run_id: Mapped[str] = mapped_column(ForeignKey("benchmark_runs.id"), nullable=False, index=True)
+    device_id: Mapped[str] = mapped_column(ForeignKey("devices.device_id"), nullable=False)
+    strategy: Mapped[str] = mapped_column(String(80), nullable=False)
+    sample_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    iterations: Mapped[int] = mapped_column(Integer, nullable=False)
+    operation: Mapped[str] = mapped_column(String(40), nullable=False)
+    duration_total_us: Mapped[int] = mapped_column(BigInteger, nullable=False)
+    latency_us_avg: Mapped[Decimal] = mapped_column(Numeric, nullable=False)
+    latency_us_max: Mapped[int] = mapped_column(Integer, nullable=False)
+    free_heap_before_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    free_heap_after_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    min_free_heap_bytes: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    dropped_samples: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
+    timestamp_ms: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    source_topic: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
+
+    run: Mapped[BenchmarkRun] = relationship(back_populates="results")
 
 
 class GameSession(TimestampMixin, Base):

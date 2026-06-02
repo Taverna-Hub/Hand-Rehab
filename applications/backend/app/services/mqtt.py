@@ -21,6 +21,9 @@ class MqttCommandPublisher:
     async def publish_end_session(self, device_id: str, payload: dict[str, Any]) -> None:
         await self._publish(f"rehab/devices/{device_id}/commands/end_session", payload)
 
+    async def publish_start_benchmark(self, device_id: str, payload: dict[str, Any]) -> None:
+        await self._publish(f"rehab/devices/{device_id}/commands/start_benchmark", payload)
+
     async def _publish(self, topic: str, payload: dict[str, Any]) -> None:
         message = json.dumps(payload, separators=(",", ":"))
         await asyncio.to_thread(

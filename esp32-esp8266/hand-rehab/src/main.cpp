@@ -80,6 +80,9 @@ static const size_t BATCH_BUFFER_CAPACITY = 64;
 static const size_t BATCH_MAX_ITEMS = 6;
 static const size_t MAX_BATCH_FLUSH_ATTEMPTS = (BATCH_BUFFER_CAPACITY / BATCH_MAX_ITEMS + 2) * 2;
 static const size_t MQTT_QUEUED_PAYLOAD_SIZE = 512;
+static const size_t BENCHMARK_MAX_SAMPLE_COUNTS = 6;
+static const size_t BENCHMARK_MAX_SAMPLE_COUNT = 20000;
+static const char *BENCHMARK_OPERATION = "sliding_insert";
 
 static const uint32_t MQTT_TASK_STACK = 8192;
 static const uint32_t BUTTON_TASK_STACK = 4096;
@@ -87,6 +90,7 @@ static const uint32_t PRESSURE_TASK_STACK = 4096;
 static const uint32_t REALTIME_TASK_STACK = 4096;
 static const uint32_t BATCH_TASK_STACK = 6144;
 static const uint32_t STATUS_LED_TASK_STACK = 2048;
+static const uint32_t BENCHMARK_TASK_STACK = 8192;
 
 static const EventBits_t WIFI_CONNECTED_BIT = BIT0;
 static const EventBits_t MQTT_CONNECTED_BIT = BIT1;
@@ -129,6 +133,23 @@ struct BatchBufferSnapshot {
   uint32_t insert_latency_max_us;
 };
 
+struct BenchmarkCommand {
+  char run_id[40];
+  uint32_t sample_counts[BENCHMARK_MAX_SAMPLE_COUNTS];
+  size_t sample_count_count;
+  uint32_t iterations;
+};
+
+struct BenchmarkMetrics {
+  uint32_t duration_total_us;
+  uint32_t latency_us_avg;
+  uint32_t latency_us_max;
+  uint32_t free_heap_before_bytes;
+  uint32_t free_heap_after_bytes;
+  uint32_t min_free_heap_bytes;
+  uint32_t dropped_samples;
+};
+
 struct JsonWriter {
   char *buffer;
   size_t capacity;
@@ -158,6 +179,7 @@ static QueueHandle_t buttonEventQueue;
 static QueueHandle_t pressureQueue;
 static QueueHandle_t mqttPublishQueue;
 static QueueHandle_t mqttCriticalPublishQueue;
+static QueueHandle_t benchmarkCommandQueue;
 static SemaphoreHandle_t mqttMutex;
 static SemaphoreHandle_t bufferMutex;
 static SemaphoreHandle_t sessionMutex;
@@ -192,6 +214,7 @@ static uint32_t buttonRawChangedAtMs[BUTTON_COUNT] = {0};
 static bool buttonLastRawPressed[BUTTON_COUNT] = {false};
 static bool buttonStablePressed[BUTTON_COUNT] = {false};
 static bool buttonDownInSession[BUTTON_COUNT] = {false};
+static volatile bool benchmarkRunning = false;
 
 static void copyText(char *destination, size_t destination_size, const char *source) {
   if (destination_size == 0) {
@@ -323,6 +346,185 @@ static void enqueueStatus(const char *status) {
            WiFi.RSSI(),
            static_cast<unsigned long>(millis()));
   enqueueMqtt(topic, payload, true);
+}
+
+static bool publishBenchmarkStatus(const char *runId, const char *status, const char *errorMessage = nullptr) {
+  char topic[128];
+  char payload[384];
+  buildTopic(topic, sizeof(topic), "benchmark/status");
+  if (errorMessage == nullptr || strlen(errorMessage) == 0) {
+    snprintf(payload, sizeof(payload),
+             "{\"run_id\":\"%s\",\"device_id\":\"%s\",\"status\":\"%s\",\"timestamp_ms\":%lu,\"error\":null}",
+             runId,
+             APP_DEVICE_ID,
+             status,
+             static_cast<unsigned long>(millis()));
+  } else {
+    snprintf(payload, sizeof(payload),
+             "{\"run_id\":\"%s\",\"device_id\":\"%s\",\"status\":\"%s\",\"timestamp_ms\":%lu,\"error\":\"%s\"}",
+             runId,
+             APP_DEVICE_ID,
+             status,
+             static_cast<unsigned long>(millis()),
+             errorMessage);
+  }
+  return publishCriticalMqtt(topic, payload, false);
+}
+
+static bool publishBenchmarkResult(
+    const char *runId,
+    const char *strategy,
+    uint32_t sampleCount,
+    uint32_t iterations,
+    const BenchmarkMetrics &metrics) {
+  char topic[128];
+  char payload[768];
+  buildTopic(topic, sizeof(topic), "benchmark/results");
+  snprintf(payload, sizeof(payload),
+           "{\"run_id\":\"%s\",\"device_id\":\"%s\",\"strategy\":\"%s\",\"sample_count\":%lu,"
+           "\"iterations\":%lu,\"operation\":\"%s\",\"duration_total_us\":%lu,"
+           "\"latency_us_avg\":%lu,\"latency_us_max\":%lu,"
+           "\"free_heap_before_bytes\":%lu,\"free_heap_after_bytes\":%lu,"
+           "\"min_free_heap_bytes\":%lu,\"dropped_samples\":%lu,\"timestamp_ms\":%lu}",
+           runId,
+           APP_DEVICE_ID,
+           strategy,
+           static_cast<unsigned long>(sampleCount),
+           static_cast<unsigned long>(iterations),
+           BENCHMARK_OPERATION,
+           static_cast<unsigned long>(metrics.duration_total_us),
+           static_cast<unsigned long>(metrics.latency_us_avg),
+           static_cast<unsigned long>(metrics.latency_us_max),
+           static_cast<unsigned long>(metrics.free_heap_before_bytes),
+           static_cast<unsigned long>(metrics.free_heap_after_bytes),
+           static_cast<unsigned long>(metrics.min_free_heap_bytes),
+           static_cast<unsigned long>(metrics.dropped_samples),
+           static_cast<unsigned long>(millis()));
+  return publishCriticalMqtt(topic, payload, false);
+}
+
+static bool isDeviceIdleForBenchmark() {
+  SessionState session = {};
+  if (!getSessionSnapshot(session)) {
+    return false;
+  }
+  return session.lifecycle == SessionLifecycle::Idle && !benchmarkRunning;
+}
+
+static BenchmarkMetrics runRingBufferBenchmark(uint32_t sampleCount, uint32_t iterations) {
+  const uint32_t heapBefore = ESP.getFreeHeap();
+  uint32_t *data = static_cast<uint32_t *>(malloc(sampleCount * sizeof(uint32_t)));
+  if (data == nullptr) {
+    return {0, 0, 0, heapBefore, ESP.getFreeHeap(), ESP.getMinFreeHeap(), sampleCount};
+  }
+
+  size_t head = 0;
+  size_t tail = 0;
+  size_t count = 0;
+  uint32_t dropped = 0;
+  for (uint32_t i = 0; i < sampleCount; i++) {
+    if (count == sampleCount) {
+      dropped++;
+      continue;
+    }
+    data[head] = i;
+    head = (head + 1) % sampleCount;
+    count++;
+  }
+
+  uint32_t totalUs = 0;
+  uint32_t maxUs = 0;
+  uint32_t item = 0;
+  for (uint32_t i = 0; i < iterations; i++) {
+    const uint32_t startedAt = micros();
+    if (count > 0) {
+      item = data[tail];
+      tail = (tail + 1) % sampleCount;
+      count--;
+    }
+    if (count == sampleCount) {
+      dropped++;
+    } else {
+      data[head] = sampleCount + i + item;
+      head = (head + 1) % sampleCount;
+      count++;
+    }
+    const uint32_t durationUs = micros() - startedAt;
+    totalUs += durationUs;
+    if (durationUs > maxUs) {
+      maxUs = durationUs;
+    }
+  }
+
+  const uint32_t heapAfter = ESP.getFreeHeap();
+  const uint32_t minHeap = ESP.getMinFreeHeap();
+  free(data);
+
+  return {
+      totalUs,
+      iterations == 0 ? 0 : totalUs / iterations,
+      maxUs,
+      heapBefore,
+      heapAfter,
+      minHeap,
+      dropped,
+  };
+}
+
+static BenchmarkMetrics runInefficientShiftBenchmark(uint32_t sampleCount, uint32_t iterations) {
+  const uint32_t heapBefore = ESP.getFreeHeap();
+  uint32_t *data = static_cast<uint32_t *>(malloc(sampleCount * sizeof(uint32_t)));
+  if (data == nullptr) {
+    return {0, 0, 0, heapBefore, ESP.getFreeHeap(), ESP.getMinFreeHeap(), sampleCount};
+  }
+
+  size_t count = 0;
+  uint32_t dropped = 0;
+  for (uint32_t i = 0; i < sampleCount; i++) {
+    if (count == sampleCount) {
+      dropped++;
+      continue;
+    }
+    data[count++] = i;
+  }
+
+  uint32_t totalUs = 0;
+  uint32_t maxUs = 0;
+  uint32_t item = 0;
+  for (uint32_t i = 0; i < iterations; i++) {
+    const uint32_t startedAt = micros();
+    if (count > 0) {
+      item = data[0];
+      for (size_t j = 1; j < count; j++) {
+        data[j - 1] = data[j];
+      }
+      count--;
+    }
+    if (count == sampleCount) {
+      dropped++;
+    } else {
+      data[count++] = sampleCount + i + item;
+    }
+    const uint32_t durationUs = micros() - startedAt;
+    totalUs += durationUs;
+    if (durationUs > maxUs) {
+      maxUs = durationUs;
+    }
+  }
+
+  const uint32_t heapAfter = ESP.getFreeHeap();
+  const uint32_t minHeap = ESP.getMinFreeHeap();
+  free(data);
+
+  return {
+      totalUs,
+      iterations == 0 ? 0 : totalUs / iterations,
+      maxUs,
+      heapBefore,
+      heapAfter,
+      minHeap,
+      dropped,
+  };
 }
 
 static bool enqueueSessionEvent(const char *eventName, const SessionState &session) {
@@ -842,6 +1044,8 @@ static void subscribeCommandTopics() {
   mqttClient.subscribe(topic);
   buildTopic(topic, sizeof(topic), "commands/end_session");
   mqttClient.subscribe(topic);
+  buildTopic(topic, sizeof(topic), "commands/start_benchmark");
+  mqttClient.subscribe(topic);
   buildTopic(topic, sizeof(topic), "commands/ping");
   mqttClient.subscribe(topic);
 }
@@ -920,6 +1124,12 @@ static void handleStartSessionCommand(byte *payload, unsigned int length) {
     return;
   }
 
+  if (benchmarkRunning) {
+    Serial.println("Comando start_session ignorado: benchmark em execucao.");
+    enqueueStatus("benchmark_running");
+    return;
+  }
+
   if (xSemaphoreTake(sessionMutex, pdMS_TO_TICKS(100)) == pdTRUE) {
     if (currentSession.lifecycle == SessionLifecycle::Running) {
       xSemaphoreGive(sessionMutex);
@@ -982,11 +1192,70 @@ static void handleEndSessionCommand() {
   }
 }
 
+static void handleStartBenchmarkCommand(byte *payload, unsigned int length) {
+  JsonDocument doc;
+  const DeserializationError error = deserializeJson(doc, payload, length);
+  if (error) {
+    Serial.println("Comando start_benchmark invalido.");
+    return;
+  }
+
+  BenchmarkCommand command = {};
+  const char *runId = doc["run_id"] | "";
+  const char *operation = doc["operation"] | "";
+  const uint32_t iterations = doc["iterations"] | 0;
+  JsonArray sampleCounts = doc["sample_counts"].as<JsonArray>();
+
+  if (strlen(runId) == 0 || strlen(runId) >= sizeof(command.run_id) ||
+      strcmp(operation, BENCHMARK_OPERATION) != 0 || iterations == 0 || sampleCounts.isNull()) {
+    Serial.println("Comando start_benchmark sem campos obrigatorios.");
+    return;
+  }
+
+  copyText(command.run_id, sizeof(command.run_id), runId);
+  command.iterations = iterations;
+  for (JsonVariant sampleCountValue : sampleCounts) {
+    if (command.sample_count_count >= BENCHMARK_MAX_SAMPLE_COUNTS) {
+      break;
+    }
+    const uint32_t sampleCount = sampleCountValue.as<uint32_t>();
+    if (sampleCount == 0 || sampleCount > BENCHMARK_MAX_SAMPLE_COUNT) {
+      publishBenchmarkStatus(runId, "failed", "sample_count_exceeds_capacity");
+      return;
+    }
+    command.sample_counts[command.sample_count_count++] = sampleCount;
+  }
+
+  if (command.sample_count_count == 0) {
+    publishBenchmarkStatus(runId, "failed", "missing_sample_counts");
+    return;
+  }
+
+  if (!isDeviceIdleForBenchmark()) {
+    Serial.println("Comando start_benchmark rejeitado: dispositivo ocupado.");
+    publishBenchmarkStatus(runId, "busy", "benchmark_requires_idle_device");
+    return;
+  }
+
+  if (benchmarkCommandQueue == nullptr ||
+      xQueueSend(benchmarkCommandQueue, &command, pdMS_TO_TICKS(20)) != pdTRUE) {
+    publishBenchmarkStatus(runId, "failed", "benchmark_queue_full");
+    return;
+  }
+
+  Serial.printf("Benchmark enfileirado: run=%s escalas=%u iteracoes=%lu\n",
+                command.run_id,
+                static_cast<unsigned>(command.sample_count_count),
+                static_cast<unsigned long>(command.iterations));
+}
+
 static void mqttCallback(char *topic, byte *payload, unsigned int length) {
   if (topicEndsWith(topic, "/commands/start_session")) {
     handleStartSessionCommand(payload, length);
   } else if (topicEndsWith(topic, "/commands/end_session")) {
     handleEndSessionCommand();
+  } else if (topicEndsWith(topic, "/commands/start_benchmark")) {
+    handleStartBenchmarkCommand(payload, length);
   } else if (topicEndsWith(topic, "/commands/ping")) {
     enqueueStatus("online");
   }
@@ -1178,6 +1447,50 @@ static void taskBatchPublish(void *parameter) {
   }
 }
 
+static void taskBenchmark(void *parameter) {
+  (void)parameter;
+
+  BenchmarkCommand command = {};
+  for (;;) {
+    if (xQueueReceive(benchmarkCommandQueue, &command, portMAX_DELAY) != pdTRUE) {
+      continue;
+    }
+
+    if (!isDeviceIdleForBenchmark()) {
+      publishBenchmarkStatus(command.run_id, "busy", "benchmark_requires_idle_device");
+      continue;
+    }
+
+    benchmarkRunning = true;
+    publishBenchmarkStatus(command.run_id, "started");
+    Serial.printf("Benchmark iniciado: run=%s\n", command.run_id);
+
+    for (size_t i = 0; i < command.sample_count_count; i++) {
+      const uint32_t sampleCount = command.sample_counts[i];
+
+      const BenchmarkMetrics ringMetrics = runRingBufferBenchmark(sampleCount, command.iterations);
+      publishBenchmarkResult(command.run_id, "ring_buffer", sampleCount, command.iterations, ringMetrics);
+      Serial.printf("Benchmark ring_buffer N=%lu avg=%lu us max=%lu us\n",
+                    static_cast<unsigned long>(sampleCount),
+                    static_cast<unsigned long>(ringMetrics.latency_us_avg),
+                    static_cast<unsigned long>(ringMetrics.latency_us_max));
+      vTaskDelay(pdMS_TO_TICKS(20));
+
+      const BenchmarkMetrics shiftMetrics = runInefficientShiftBenchmark(sampleCount, command.iterations);
+      publishBenchmarkResult(command.run_id, "inefficient_shift_buffer", sampleCount, command.iterations, shiftMetrics);
+      Serial.printf("Benchmark inefficient_shift_buffer N=%lu avg=%lu us max=%lu us\n",
+                    static_cast<unsigned long>(sampleCount),
+                    static_cast<unsigned long>(shiftMetrics.latency_us_avg),
+                    static_cast<unsigned long>(shiftMetrics.latency_us_max));
+      vTaskDelay(pdMS_TO_TICKS(20));
+    }
+
+    publishBenchmarkStatus(command.run_id, "completed");
+    benchmarkRunning = false;
+    Serial.printf("Benchmark concluido: run=%s\n", command.run_id);
+  }
+}
+
 static void taskStatusLed(void *parameter) {
   (void)parameter;
 
@@ -1217,6 +1530,7 @@ static void setupFreeRtos() {
   pressureQueue = xQueueCreate(16, sizeof(PressureRealtimeMessage));
   mqttPublishQueue = xQueueCreate(16, sizeof(MqttMessage));
   mqttCriticalPublishQueue = xQueueCreate(4, sizeof(MqttMessage));
+  benchmarkCommandQueue = xQueueCreate(1, sizeof(BenchmarkCommand));
   mqttMutex = xSemaphoreCreateRecursiveMutex();
   bufferMutex = xSemaphoreCreateMutex();
   sessionMutex = xSemaphoreCreateMutex();
@@ -1241,6 +1555,7 @@ static void setupFreeRtos() {
   xTaskCreatePinnedToCore(taskPressure, "pressure", PRESSURE_TASK_STACK, nullptr, 1, nullptr, 1);
   xTaskCreatePinnedToCore(taskRealtimePublish, "realtime", REALTIME_TASK_STACK, nullptr, 2, nullptr, 1);
   xTaskCreatePinnedToCore(taskBatchPublish, "batch", BATCH_TASK_STACK, nullptr, 1, nullptr, 1);
+  xTaskCreatePinnedToCore(taskBenchmark, "benchmark", BENCHMARK_TASK_STACK, nullptr, 1, nullptr, 1);
   xTaskCreatePinnedToCore(taskStatusLed, "status_led", STATUS_LED_TASK_STACK, nullptr, 1, nullptr, 1);
 }
 

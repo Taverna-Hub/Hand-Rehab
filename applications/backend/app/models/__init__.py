@@ -1,4 +1,6 @@
 from app.models.domain import (
+    BenchmarkResult,
+    BenchmarkRun,
     ButtonBatch,
     ButtonBatchPerformanceMetadata,
     ButtonEvent,
@@ -12,6 +14,8 @@ from app.models.domain import (
 )
 
 __all__ = [
+    "BenchmarkResult",
+    "BenchmarkRun",
     "ButtonBatch",
     "ButtonBatchPerformanceMetadata",
     "ButtonEvent",
