@@ -2,7 +2,7 @@
 
 Sistema IoT para apoiar atividades de reabilitacao das maos com ESP32, quatro botoes fisicos, sensor de pressao HX710B, Node-RED, backend FastAPI e Postgres.
 
-Este MVP entrega a base tecnica de comunicacao em tempo real e persistencia historica em batch. Gameplay completo, dashboard funcional, autenticacao e regras clinicas avancadas ficam fora deste ciclo.
+Este MVP entrega a base tecnica de comunicacao em tempo real, persistencia historica em batch, jogo frontend e um dashboard inicial de desempenho. Autenticacao e regras clinicas avancadas ficam fora deste ciclo.
 
 ## Layout do repositorio
 
@@ -100,10 +100,12 @@ O container monta esse arquivo em `/data/flows.json`. Ele cria o broker Aedes na
 
 ## Frontend
 
-O frontend em `applications/frontend/` tem uma tela de jogo em React + Tailwind. A tela lista/cria pacientes, escolhe mao esquerda/direita, inicia/finaliza sessao pelo backend e recebe inputs em tempo real pelo WebSocket do Node-RED.
+O frontend em `applications/frontend/` tem uma tela de configuracao e uma tela de jogo em React + Tailwind. A configuracao lista/cria pacientes, escolhe mao esquerda/direita, mostra um dashboard inicial e inicia/finaliza sessao pelo backend. O jogo ocupa a tela inteira e recebe inputs em tempo real pelo WebSocket do Node-RED.
 
 - Modo `1 faixa`: usa sessao `mode="pressure"` e acerto por limiar de pressao.
 - Modo `4 faixas`: usa sessao `mode="buttons"` e mapeia botoes 1..4 para azul, vermelho, verde e amarelo.
+- Ao finalizar a sessao, o frontend envia `gameplay_metrics` para `PATCH /api/v1/game-sessions/{session_id}/finish`. O backend persiste taxa de acertos, erros, estimulos perdidos, tempos de reacao, precisao por faixa/dedo, maior combo e pontuacao final.
+- O dashboard inicial consome `GET /api/v1/metrics/gameplay/sessions` para exibir sessoes concluidas e agregados de desempenho.
 
 ## Firmware ESP32
 

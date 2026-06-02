@@ -57,13 +57,35 @@ com status HTTP `409`.
 
 `GET /api/v1/game-sessions/active` retorna apenas sessoes com `status="running"`. Pela regra atual, a lista tera no maximo um item.
 
-Payload de finalizacao:
+Payload minimo de finalizacao:
 
 ```json
 {}
 ```
 
-O corpo do `PATCH /api/v1/game-sessions/{session_id}/finish` pode ser omitido. Ao finalizar, o backend calcula `duration_seconds` a partir de `finished_at - started_at`, marca `status="finished"` e publica MQTT em `rehab/devices/{device_id}/commands/end_session`.
+O corpo do `PATCH /api/v1/game-sessions/{session_id}/finish` pode ser omitido. Para persistir o desempenho do jogo, envie `gameplay_metrics` no mesmo PATCH:
+
+```json
+{
+  "gameplay_metrics": {
+    "total_stimuli": 12,
+    "hits": 9,
+    "errors": 2,
+    "missed_stimuli": 3,
+    "score": 1250,
+    "max_combo": 5,
+    "avg_reaction_ms": 143.7,
+    "best_reaction_ms": 72,
+    "worst_reaction_ms": 246,
+    "accuracy_rate": 75,
+    "error_rate": 18.18,
+    "missed_rate": 25,
+    "precision_by_lane": {"1": 100, "2": 50, "3": 75, "4": 66.67}
+  }
+}
+```
+
+Ao finalizar, o backend calcula `duration_seconds` a partir de `finished_at - started_at`, marca `status="finished"`, salva as metricas de gameplay quando enviadas e publica MQTT em `rehab/devices/{device_id}/commands/end_session`.
 
 Se a sessao ja estiver finalizada ou nao estiver `running`, a API retorna:
 
@@ -88,8 +110,11 @@ Internamente, batches/metadados de botoes e pressao ficam em tabelas separadas, 
 
 - `GET /api/v1/metrics/sessions/{session_id}/summary`
 - `GET /api/v1/metrics/users/{user_id}/summary`
+- `GET /api/v1/metrics/gameplay/sessions`
 
 As metricas retornam contagens de eventos/leitura, batches, drops, latencias de insercao e dados basicos de sessao ou usuario.
+
+`GET /api/v1/metrics/gameplay/sessions` retorna as sessoes finalizadas com KPIs do jogo para o dashboard inicial: taxa de acertos, taxa de erros, taxa de estimulos perdidos, tempos de reacao, precisao por faixa/dedo, maior sequencia de acertos e pontuacao final.
 
 ## Swagger/OpenAPI
 

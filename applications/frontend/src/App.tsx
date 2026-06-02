@@ -4,8 +4,11 @@ import {
   createUser,
   finishGameSession,
   listActiveSessions,
+  listGameplayMetrics,
   listUsers,
   startGameSession,
+  type GameplayMetricsPayload,
+  type GameplayMetricsRead,
   type GameSessionRead,
   type Sex,
   type UserRead,
@@ -35,6 +38,7 @@ const FOUR_LANE_PATTERN = [1, 2, 3, 4, 2, 4, 1, 3, 1, 4, 2, 3];
 type NoteStatus = "pending" | "hit" | "miss";
 type HitQuality = "perfect" | "good";
 type FeedbackTone = "hit" | "miss" | "neutral";
+type AppScreen = "setup" | "dashboard";
 
 interface LaneDefinition {
   id: number;
@@ -58,9 +62,17 @@ interface ScoreStats {
   combo: number;
   maxCombo: number;
   hits: number;
+  errors: number;
+  missedStimuli: number;
   perfects: number;
   goods: number;
-  misses: number;
+  reactionTimesMs: number[];
+  laneStats: Record<number, LaneScoreStats>;
+}
+
+interface LaneScoreStats {
+  stimuli: number;
+  hits: number;
 }
 
 interface LastInput {
@@ -82,15 +94,25 @@ const LANES: Record<number, LaneDefinition> = {
   4: { id: 4, label: "Amarelo", color: "#eab308", soft: "rgba(234, 179, 8, 0.2)", line: "rgba(250, 204, 21, 0.66)" },
 };
 
-const INITIAL_STATS: ScoreStats = {
-  score: 0,
-  combo: 0,
-  maxCombo: 0,
-  hits: 0,
-  perfects: 0,
-  goods: 0,
-  misses: 0,
-};
+function initialStats(): ScoreStats {
+  return {
+    combo: 0,
+    errors: 0,
+    goods: 0,
+    hits: 0,
+    laneStats: {
+      1: { hits: 0, stimuli: 0 },
+      2: { hits: 0, stimuli: 0 },
+      3: { hits: 0, stimuli: 0 },
+      4: { hits: 0, stimuli: 0 },
+    },
+    maxCombo: 0,
+    missedStimuli: 0,
+    perfects: 0,
+    reactionTimesMs: [],
+    score: 0,
+  };
+}
 
 type ViteImportMeta = ImportMeta & {
   env?: {
@@ -202,6 +224,72 @@ function makeNote(sessionId: string, beatIndex: number, mode: GameMode, gameStar
   };
 }
 
+function percent(numerator: number, denominator: number) {
+  if (denominator <= 0) {
+    return null;
+  }
+  return Number(((numerator / denominator) * 100).toFixed(2));
+}
+
+function average(values: number[]) {
+  if (values.length === 0) {
+    return null;
+  }
+  return Number((values.reduce((total, value) => total + value, 0) / values.length).toFixed(2));
+}
+
+function buildGameplayMetrics(stats: ScoreStats): GameplayMetricsPayload {
+  const totalStimuli = Object.values(stats.laneStats).reduce((total, lane) => total + lane.stimuli, 0);
+  const totalResponses = stats.hits + stats.errors;
+  const precisionByLane = Object.fromEntries(
+    Object.entries(stats.laneStats).map(([laneId, lane]) => [laneId, percent(lane.hits, lane.stimuli) ?? 0]),
+  );
+
+  return {
+    accuracy_rate: percent(stats.hits, totalStimuli),
+    avg_reaction_ms: average(stats.reactionTimesMs),
+    best_reaction_ms: stats.reactionTimesMs.length > 0 ? Math.min(...stats.reactionTimesMs) : null,
+    error_rate: percent(stats.errors, totalResponses),
+    errors: stats.errors,
+    hits: stats.hits,
+    max_combo: stats.maxCombo,
+    missed_rate: percent(stats.missedStimuli, totalStimuli),
+    missed_stimuli: stats.missedStimuli,
+    precision_by_lane: precisionByLane,
+    score: stats.score,
+    total_stimuli: totalStimuli,
+    worst_reaction_ms: stats.reactionTimesMs.length > 0 ? Math.max(...stats.reactionTimesMs) : null,
+  };
+}
+
+function formatPercent(value: number | null | undefined) {
+  return typeof value === "number" ? `${value.toFixed(1)}%` : "--";
+}
+
+function formatMs(value: number | null | undefined) {
+  return typeof value === "number" ? `${Math.round(value)} ms` : "--";
+}
+
+function formatDateTime(value: string | null | undefined) {
+  if (!value) {
+    return "--";
+  }
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    month: "2-digit",
+  }).format(new Date(value));
+}
+
+function modeLabel(mode: GameMode) {
+  return mode === "pressure" ? "1 faixa" : "4 faixas";
+}
+
+function handLabel(value: Hand) {
+  return value === "left" ? "esquerda" : "direita";
+}
+
 export default function App() {
   const [users, setUsers] = useState<UserRead[]>([]);
   const [selectedUserId, setSelectedUserId] = useState("");
@@ -213,7 +301,8 @@ export default function App() {
   const [threshold, setThreshold] = useState(DEFAULT_THRESHOLD_KPA);
   const [activeSession, setActiveSession] = useState<GameSessionRead | null>(null);
   const [notes, setNotes] = useState<ActiveNote[]>([]);
-  const [stats, setStats] = useState<ScoreStats>(INITIAL_STATS);
+  const [stats, setStats] = useState<ScoreStats>(initialStats);
+  const [dashboardMetrics, setDashboardMetrics] = useState<GameplayMetricsRead[]>([]);
   const [nowMs, setNowMs] = useState(0);
   const [pressedLanes, setPressedLanes] = useState<Record<number, boolean>>({});
   const [pressureValue, setPressureValue] = useState<number | null>(null);
@@ -225,9 +314,11 @@ export default function App() {
   const [loading, setLoading] = useState(true);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const [screen, setScreen] = useState<AppScreen>("setup");
 
   const activeSessionRef = useRef<GameSessionRead | null>(null);
   const notesRef = useRef<ActiveNote[]>([]);
+  const statsRef = useRef<ScoreStats>(stats);
   const thresholdRef = useRef(DEFAULT_THRESHOLD_KPA);
   const pressureAboveThresholdRef = useRef(false);
   const localGameStartRef = useRef<number | null>(null);
@@ -241,10 +332,41 @@ export default function App() {
     [activeLanes.length],
   );
   const selectedUser = users.find((user) => user.id === selectedUserId);
+  const dashboardSummary = useMemo(() => {
+    const finishedSessions = dashboardMetrics.length;
+    const bestScore = Math.max(0, ...dashboardMetrics.map((metric) => metric.score));
+    const bestCombo = Math.max(0, ...dashboardMetrics.map((metric) => metric.max_combo));
+    const totalScore = dashboardMetrics.reduce((total, metric) => total + metric.score, 0);
+    const totalStimuli = dashboardMetrics.reduce((total, metric) => total + metric.total_stimuli, 0);
+    const totalHits = dashboardMetrics.reduce((total, metric) => total + metric.hits, 0);
+    const totalErrors = dashboardMetrics.reduce((total, metric) => total + metric.errors, 0);
+    const totalMissed = dashboardMetrics.reduce((total, metric) => total + metric.missed_stimuli, 0);
+    const reactionValues = dashboardMetrics
+      .map((metric) => metric.avg_reaction_ms)
+      .filter((value): value is number => typeof value === "number");
+    const bestReactionValues = dashboardMetrics
+      .map((metric) => metric.best_reaction_ms)
+      .filter((value): value is number => typeof value === "number");
+    const worstReactionValues = dashboardMetrics
+      .map((metric) => metric.worst_reaction_ms)
+      .filter((value): value is number => typeof value === "number");
+
+    return {
+      averageAccuracy: percent(totalHits, totalStimuli),
+      averageError: percent(totalErrors, totalHits + totalErrors),
+      averageMissed: percent(totalMissed, totalStimuli),
+      averageReaction: average(reactionValues),
+      bestCombo,
+      bestReaction: bestReactionValues.length > 0 ? Math.min(...bestReactionValues) : null,
+      bestScore,
+      finishedSessions,
+      totalScore,
+      worstReaction: worstReactionValues.length > 0 ? Math.max(...worstReactionValues) : null,
+    };
+  }, [dashboardMetrics]);
   const elapsedSeconds = activeSession
     ? Math.max(0, Math.floor((Date.now() - Date.parse(activeSession.started_at)) / 1000))
     : 0;
-  const controlsLocked = Boolean(activeSession) || apiBusy;
 
   useEffect(() => {
     activeSessionRef.current = activeSession;
@@ -253,6 +375,10 @@ export default function App() {
   useEffect(() => {
     notesRef.current = notes;
   }, [notes]);
+
+  useEffect(() => {
+    statsRef.current = stats;
+  }, [stats]);
 
   useEffect(() => {
     thresholdRef.current = threshold;
@@ -271,7 +397,7 @@ export default function App() {
     pressureAboveThresholdRef.current = false;
     setNowMs(now);
     setNotes([]);
-    setStats({ ...INITIAL_STATS });
+    setStats(initialStats());
     setPressedLanes({});
     setPressureValue(null);
     setPressureActive(false);
@@ -304,11 +430,16 @@ export default function App() {
       setLoading(true);
       setApiError(null);
       try {
-        const [loadedUsers, sessions] = await Promise.all([listUsers(), listActiveSessions()]);
+        const [loadedUsers, sessions, metrics] = await Promise.all([
+          listUsers(),
+          listActiveSessions(),
+          listGameplayMetrics(),
+        ]);
         if (!mounted) {
           return;
         }
         setUsers(loadedUsers);
+        setDashboardMetrics(metrics);
         setSelectedUserId((current) => current || sessions[0]?.user_id || loadedUsers[0]?.id || "");
         if (sessions[0]) {
           applyActiveSession(sessions[0]);
@@ -330,9 +461,9 @@ export default function App() {
     };
   }, [applyActiveSession]);
 
-  const registerMiss = useCallback(
+  const registerError = useCallback(
     (label = "Erro") => {
-      setStats((current) => ({ ...current, combo: 0, misses: current.misses + 1 }));
+      setStats((current) => ({ ...current, combo: 0, errors: current.errors + 1 }));
       pushFeedback(label, "miss");
     },
     [pushFeedback],
@@ -347,13 +478,14 @@ export default function App() {
         .sort((left, right) => left.delta - right.delta)[0];
 
       if (!candidate) {
-        registerMiss("Fora");
+        registerError("Fora");
         return;
       }
 
       const quality: HitQuality = candidate.delta <= PERFECT_WINDOW_MS ? "perfect" : "good";
       const points = quality === "perfect" ? 120 : 80;
       const judgedAt = inputTime;
+      const reactionMs = Math.round(candidate.delta);
       const nextNotes = notesRef.current.map((note) =>
         note.id === candidate.note.id ? { ...note, judgedAt, quality, status: "hit" as const } : note,
       );
@@ -366,14 +498,22 @@ export default function App() {
           combo,
           goods: current.goods + (quality === "good" ? 1 : 0),
           hits: current.hits + 1,
+          laneStats: {
+            ...current.laneStats,
+            [laneId]: {
+              hits: (current.laneStats[laneId]?.hits ?? 0) + 1,
+              stimuli: current.laneStats[laneId]?.stimuli ?? 0,
+            },
+          },
           maxCombo: Math.max(current.maxCombo, combo),
           perfects: current.perfects + (quality === "perfect" ? 1 : 0),
+          reactionTimesMs: [...current.reactionTimesMs, reactionMs],
           score: current.score + points + Math.min(current.combo * 2, 50),
         };
       });
       pushFeedback(quality === "perfect" ? "Perfeito" : "Bom", "hit");
     },
-    [pushFeedback, registerMiss],
+    [pushFeedback, registerError],
   );
 
   const recordRealtimeInput = useCallback((event: RealtimeEvent) => {
@@ -457,6 +597,10 @@ export default function App() {
 
       setNotes((current) => {
         let missed = 0;
+        const stimuliByLane = spawnedNotes.reduce<Record<number, number>>((counts, note) => {
+          counts[note.laneId] = (counts[note.laneId] ?? 0) + 1;
+          return counts;
+        }, {});
         const next = [...current, ...spawnedNotes]
           .map((note) => {
             if (note.status === "pending" && now - note.hitAt > MISS_GRACE_MS) {
@@ -476,9 +620,23 @@ export default function App() {
           setStats((currentStats) => ({
             ...currentStats,
             combo: 0,
-            misses: currentStats.misses + missed,
+            missedStimuli: currentStats.missedStimuli + missed,
           }));
           pushFeedback("Perdeu", "miss");
+        }
+
+        if (Object.keys(stimuliByLane).length > 0) {
+          setStats((currentStats) => {
+            const laneStats = { ...currentStats.laneStats };
+            for (const [laneIdText, amount] of Object.entries(stimuliByLane)) {
+              const laneId = Number(laneIdText);
+              laneStats[laneId] = {
+                hits: laneStats[laneId]?.hits ?? 0,
+                stimuli: (laneStats[laneId]?.stimuli ?? 0) + amount,
+              };
+            }
+            return { ...currentStats, laneStats };
+          });
         }
 
         notesRef.current = next;
@@ -549,9 +707,14 @@ export default function App() {
     setApiBusy(true);
     setApiError(null);
     try {
-      await finishGameSession(activeSession.id);
+      await finishGameSession(activeSession.id, {
+        gameplay_metrics: buildGameplayMetrics(statsRef.current),
+      });
+      const metrics = await listGameplayMetrics();
+      setDashboardMetrics(metrics);
       setActiveSession(null);
       setSessionSignal("finalizada");
+      setScreen("dashboard");
       resetLocalGame();
       pushFeedback("Fim", "neutral");
       await refreshUsers();
@@ -560,6 +723,131 @@ export default function App() {
     } finally {
       setApiBusy(false);
     }
+  }
+
+  if (!activeSession && screen === "dashboard") {
+    return (
+      <main className="min-h-screen bg-[#f4f7fb] px-4 py-5 text-slate-900">
+        <div className="mx-auto flex min-h-[calc(100vh-2.5rem)] w-full max-w-6xl flex-col gap-4">
+          <header className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div>
+              <p className="text-xs font-semibold uppercase text-slate-500">Hand Rehab</p>
+              <h1 className="mt-1 text-2xl font-semibold text-slate-950">Dashboard</h1>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusPill status={connectionStatus} />
+              <button
+                className="h-10 rounded-lg border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
+                disabled={apiBusy}
+                type="button"
+                onClick={() => setScreen("setup")}
+              >
+                Configurar sessao
+              </button>
+            </div>
+          </header>
+
+          <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <Metric label="Taxa de acertos" value={formatPercent(dashboardSummary.averageAccuracy)} />
+            <Metric label="Taxa de erros" value={formatPercent(dashboardSummary.averageError)} />
+            <Metric label="Estimulos perdidos" value={formatPercent(dashboardSummary.averageMissed)} />
+            <Metric label="Reacao media" value={formatMs(dashboardSummary.averageReaction)} />
+            <Metric label="Melhor reacao" value={formatMs(dashboardSummary.bestReaction)} />
+            <Metric label="Pior reacao" value={formatMs(dashboardSummary.worstReaction)} />
+            <Metric label="Maior sequencia" value={dashboardSummary.bestCombo} />
+            <Metric label="Sessoes realizadas" value={dashboardSummary.finishedSessions} />
+          </section>
+
+          <section className="grid flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
+              <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
+                <div>
+                  <h2 className="text-lg font-semibold text-slate-950">Sessoes finalizadas</h2>
+                  <p className="mt-1 text-sm text-slate-500">Historico salvo ao encerrar o jogo.</p>
+                </div>
+                <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
+                  Score total {dashboardSummary.totalScore.toLocaleString("pt-BR")}
+                </span>
+              </div>
+
+              <div className="overflow-x-auto">
+                <div className="min-w-[760px]">
+                  <div className="grid grid-cols-[1.35fr_88px_88px_92px_92px_92px_92px] bg-slate-50 px-4 py-2 text-xs font-semibold uppercase text-slate-500">
+                    <span>Paciente</span>
+                    <span className="text-right">Acertos</span>
+                    <span className="text-right">Erros</span>
+                    <span className="text-right">Perdidos</span>
+                    <span className="text-right">Reacao</span>
+                    <span className="text-right">Combo</span>
+                    <span className="text-right">Score</span>
+                  </div>
+                  {dashboardMetrics.length === 0 ? (
+                    <p className="px-4 py-6 text-sm text-slate-500">Nenhuma sessao finalizada com metricas ainda.</p>
+                  ) : (
+                    dashboardMetrics.map((metric) => (
+                      <div
+                        className="grid grid-cols-[1.35fr_88px_88px_92px_92px_92px_92px] border-t border-slate-100 px-4 py-3 text-sm"
+                        key={metric.session_id}
+                      >
+                        <div className="min-w-0">
+                          <p className="truncate font-medium text-slate-900">{metric.user_name}</p>
+                          <p className="text-xs text-slate-500">
+                            {formatDateTime(metric.finished_at)} | {modeLabel(metric.mode)} | mao {handLabel(metric.hand)}
+                          </p>
+                        </div>
+                        <span className="self-center text-right tabular-nums">{formatPercent(metric.accuracy_rate)}</span>
+                        <span className="self-center text-right tabular-nums">{formatPercent(metric.error_rate)}</span>
+                        <span className="self-center text-right tabular-nums">{formatPercent(metric.missed_rate)}</span>
+                        <span className="self-center text-right tabular-nums">{formatMs(metric.avg_reaction_ms)}</span>
+                        <span className="self-center text-right tabular-nums">{metric.max_combo}</span>
+                        <span className="self-center text-right tabular-nums">{metric.score}</span>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <aside className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <h2 className="text-lg font-semibold text-slate-950">Precisao por dedo</h2>
+              <p className="mt-1 text-sm text-slate-500">Ultimas sessoes com 4 faixas.</p>
+              <div className="mt-4 space-y-4">
+                {dashboardMetrics.filter((metric) => metric.mode === "buttons").length === 0 ? (
+                  <p className="text-sm text-slate-500">Sem sessoes de botoes ainda.</p>
+                ) : (
+                  dashboardMetrics
+                    .filter((metric) => metric.mode === "buttons")
+                    .slice(0, 4)
+                    .map((metric) => (
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 p-3" key={metric.session_id}>
+                        <div className="flex items-center justify-between gap-3">
+                          <p className="truncate text-sm font-semibold text-slate-900">{metric.user_name}</p>
+                          <span className="text-xs text-slate-500">{formatDateTime(metric.finished_at)}</span>
+                        </div>
+                        <div className="mt-3 grid grid-cols-4 gap-2">
+                          {[1, 2, 3, 4].map((laneId) => (
+                            <div className="text-center" key={laneId}>
+                              <div
+                                className="mx-auto h-3 w-8 rounded-full"
+                                style={{ backgroundColor: LANES[laneId].color }}
+                              />
+                              <p className="mt-1 text-xs font-semibold tabular-nums text-slate-700">
+                                {formatPercent(metric.precision_by_lane[String(laneId)] ?? null)}
+                              </p>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))
+                )}
+              </div>
+            </aside>
+          </section>
+
+          {apiError ? <p className="text-sm font-semibold text-rose-600">{apiError}</p> : null}
+        </div>
+      </main>
+    );
   }
 
   if (!activeSession) {
@@ -576,7 +864,16 @@ export default function App() {
                       Configure paciente, modo e mao antes de iniciar. Depois a pista ocupa a tela inteira.
                     </p>
                   </div>
-                  <StatusPill status={connectionStatus} />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <StatusPill status={connectionStatus} />
+                    <button
+                      className="h-9 rounded-lg border border-slate-300 bg-white px-3 text-sm font-semibold text-slate-800 transition hover:border-slate-500"
+                      type="button"
+                      onClick={() => setScreen("dashboard")}
+                    >
+                      Dashboard
+                    </button>
+                  </div>
                 </div>
 
                 <div className="mt-8 grid gap-3 sm:grid-cols-2">

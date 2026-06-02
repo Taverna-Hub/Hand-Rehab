@@ -179,6 +179,46 @@ async def test_finish_calculates_duration_and_publishes_mqtt(client, mqtt_publis
 
 
 @pytest.mark.anyio
+async def test_finish_persists_gameplay_metrics_for_dashboard(client):
+    user = await create_user(client)
+    session = await create_session(client, user["id"], mode="buttons", hand="right")
+
+    response = await client.patch(
+        f"/api/v1/game-sessions/{session['id']}/finish",
+        json={
+            "gameplay_metrics": {
+                "total_stimuli": 12,
+                "hits": 9,
+                "errors": 2,
+                "missed_stimuli": 3,
+                "score": 1250,
+                "max_combo": 5,
+                "avg_reaction_ms": 143.7,
+                "best_reaction_ms": 72,
+                "worst_reaction_ms": 246,
+                "accuracy_rate": 75,
+                "error_rate": 18.18,
+                "missed_rate": 25,
+                "precision_by_lane": {"1": 100, "2": 50, "3": 75, "4": 66.67},
+            }
+        },
+    )
+    dashboard = await client.get("/api/v1/metrics/gameplay/sessions")
+
+    assert response.status_code == 200, response.text
+    assert dashboard.status_code == 200, dashboard.text
+    payload = dashboard.json()
+    assert len(payload) == 1
+    assert payload[0]["session_id"] == session["id"]
+    assert payload[0]["user_name"] == user["name"]
+    assert payload[0]["score"] == 1250
+    assert payload[0]["hits"] == 9
+    assert payload[0]["missed_stimuli"] == 3
+    assert payload[0]["accuracy_rate"] == 75
+    assert payload[0]["precision_by_lane"]["1"] == 100
+
+
+@pytest.mark.anyio
 async def test_finish_rejects_already_finished_session_without_extra_mqtt(client, mqtt_publisher):
     user = await create_user(client)
     session = await create_session(client, user["id"])

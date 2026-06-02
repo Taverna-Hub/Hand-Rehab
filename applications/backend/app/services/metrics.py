@@ -11,12 +11,13 @@ from app.models import (
     ButtonBatchPerformanceMetadata,
     ButtonEvent,
     GameSession,
+    GameplayMetrics,
     PressureBatch,
     PressureBatchPerformanceMetadata,
     PressureReading,
     User,
 )
-from app.schemas.metrics import SessionSummary, UserSummary
+from app.schemas.metrics import GameplayMetricsRead, SessionSummary, UserSummary
 
 
 async def _scalar(db: AsyncSession, statement, default=0):
@@ -172,3 +173,42 @@ async def get_user_summary(db: AsyncSession, user_id: str) -> UserSummary:
         pressure_raw_avg=_to_float(pressure_raw_avg),
         pressure_raw_max=pressure_raw_max,
     )
+
+
+async def list_gameplay_metrics(db: AsyncSession) -> list[GameplayMetricsRead]:
+    result = await db.execute(
+        select(GameSession, GameplayMetrics, User)
+        .join(GameplayMetrics, GameplayMetrics.session_id == GameSession.id)
+        .join(User, User.id == GameSession.user_id)
+        .order_by(GameSession.finished_at.desc(), GameSession.created_at.desc())
+    )
+
+    rows = []
+    for game_session, metrics, user in result.all():
+        rows.append(
+            GameplayMetricsRead(
+                session_id=game_session.id,
+                user_id=game_session.user_id,
+                user_name=user.name,
+                device_id=game_session.device_id,
+                hand=game_session.hand,
+                mode=game_session.mode,
+                duration_seconds=game_session.duration_seconds,
+                started_at=game_session.started_at,
+                finished_at=game_session.finished_at,
+                total_stimuli=metrics.total_stimuli,
+                hits=metrics.hits,
+                errors=metrics.errors,
+                missed_stimuli=metrics.missed_stimuli,
+                score=metrics.score,
+                max_combo=metrics.max_combo,
+                avg_reaction_ms=_to_float(metrics.avg_reaction_ms),
+                best_reaction_ms=metrics.best_reaction_ms,
+                worst_reaction_ms=metrics.worst_reaction_ms,
+                accuracy_rate=_to_float(metrics.accuracy_rate),
+                error_rate=_to_float(metrics.error_rate),
+                missed_rate=_to_float(metrics.missed_rate),
+                precision_by_lane=metrics.precision_by_lane or {},
+            )
+        )
+    return rows

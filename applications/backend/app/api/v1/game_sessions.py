@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
+from decimal import Decimal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
 from sqlalchemy import select
@@ -10,8 +11,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.db.base import utc_now
 from app.db.session import get_session
 from app.core.config import Settings, get_settings
-from app.models import Device, GameSession, User
-from app.schemas.sessions import GameSessionCreate, GameSessionFinish, GameSessionRead
+from app.models import Device, GameSession, GameplayMetrics, User
+from app.schemas.sessions import GameSessionCreate, GameSessionFinish, GameSessionRead, GameplayMetricsPayload
 from app.services.mqtt import MqttCommandPublisher, get_mqtt_publisher
 
 router = APIRouter(prefix="/game-sessions", tags=["game-sessions"])
@@ -57,6 +58,32 @@ def _elapsed_seconds(started_at: datetime, finished_at: datetime) -> int:
     if started_at.tzinfo is None and finished_at.tzinfo is not None:
         finished_at = finished_at.replace(tzinfo=None)
     return max(0, int((finished_at - started_at).total_seconds()))
+
+
+def _decimal_or_none(value: float | None) -> Decimal | None:
+    return None if value is None else Decimal(str(round(value, 4)))
+
+
+def _gameplay_metrics_model(game_session: GameSession, payload: GameplayMetricsPayload) -> GameplayMetrics:
+    return GameplayMetrics(
+        session_id=game_session.id,
+        user_id=game_session.user_id,
+        hand=game_session.hand,
+        mode=game_session.mode,
+        total_stimuli=payload.total_stimuli,
+        hits=payload.hits,
+        errors=payload.errors,
+        missed_stimuli=payload.missed_stimuli,
+        score=payload.score,
+        max_combo=payload.max_combo,
+        avg_reaction_ms=_decimal_or_none(payload.avg_reaction_ms),
+        best_reaction_ms=payload.best_reaction_ms,
+        worst_reaction_ms=payload.worst_reaction_ms,
+        accuracy_rate=_decimal_or_none(payload.accuracy_rate),
+        error_rate=_decimal_or_none(payload.error_rate),
+        missed_rate=_decimal_or_none(payload.missed_rate),
+        precision_by_lane=payload.precision_by_lane,
+    )
 
 
 async def _active_session_exists(session: AsyncSession) -> bool:
@@ -213,6 +240,8 @@ async def finish_game_session(
     game_session.duration_seconds = _elapsed_seconds(game_session.started_at, finished_at)
     if payload.notes is not None:
         game_session.notes = payload.notes
+    if payload.gameplay_metrics is not None:
+        session.add(_gameplay_metrics_model(game_session, payload.gameplay_metrics))
 
     await session.commit()
     await session.refresh(game_session)

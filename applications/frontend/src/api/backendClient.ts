@@ -46,6 +46,39 @@ export interface GameSessionCreate {
   mode: GameMode;
 }
 
+export interface GameplayMetricsPayload {
+  total_stimuli: number;
+  hits: number;
+  errors: number;
+  missed_stimuli: number;
+  score: number;
+  max_combo: number;
+  avg_reaction_ms: number | null;
+  best_reaction_ms: number | null;
+  worst_reaction_ms: number | null;
+  accuracy_rate: number | null;
+  error_rate: number | null;
+  missed_rate: number | null;
+  precision_by_lane: Record<string, number>;
+}
+
+export interface GameplayMetricsRead extends GameplayMetricsPayload {
+  session_id: string;
+  user_id: string;
+  user_name: string;
+  device_id: string;
+  hand: Hand;
+  mode: GameMode;
+  duration_seconds: number | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface GameSessionFinishPayload {
+  notes?: string | null;
+  gameplay_metrics?: GameplayMetricsPayload | null;
+}
+
 export function backendApiUrl() {
   const viteEnv = (import.meta as ViteImportMeta).env;
   if (viteEnv?.VITE_BACKEND_API_URL) {
@@ -100,9 +133,13 @@ export function startGameSession(payload: GameSessionCreate) {
   });
 }
 
-export function finishGameSession(sessionId: string) {
+export function finishGameSession(sessionId: string, payload: GameSessionFinishPayload = {}) {
   return requestJson<GameSessionRead>(`/api/v1/game-sessions/${sessionId}/finish`, {
-    body: JSON.stringify({}),
+    body: JSON.stringify(payload),
     method: "PATCH",
   });
+}
+
+export function listGameplayMetrics() {
+  return requestJson<GameplayMetricsRead[]>("/api/v1/metrics/gameplay/sessions");
 }

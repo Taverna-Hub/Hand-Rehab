@@ -4,8 +4,8 @@ from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.db.session import get_session
-from app.schemas.metrics import SessionSummary, UserSummary
-from app.services.metrics import get_session_summary, get_user_summary
+from app.schemas.metrics import GameplayMetricsRead, SessionSummary, UserSummary
+from app.services.metrics import get_session_summary, get_user_summary, list_gameplay_metrics
 
 router = APIRouter(prefix="/metrics", tags=["metrics"])
 
@@ -18,3 +18,8 @@ async def session_summary(session_id: str, session: AsyncSession = Depends(get_s
 @router.get("/users/{user_id}/summary", response_model=UserSummary)
 async def user_summary(user_id: str, session: AsyncSession = Depends(get_session)) -> UserSummary:
     return await get_user_summary(session, user_id)
+
+
+@router.get("/gameplay/sessions", response_model=list[GameplayMetricsRead])
+async def gameplay_sessions(session: AsyncSession = Depends(get_session)) -> list[GameplayMetricsRead]:
+    return await list_gameplay_metrics(session)

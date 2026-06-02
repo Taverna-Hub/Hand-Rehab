@@ -3,7 +3,20 @@ from __future__ import annotations
 from datetime import datetime
 from decimal import Decimal
 
-from sqlalchemy import BigInteger, CheckConstraint, DateTime, ForeignKey, Index, Integer, Numeric, String, Text, UniqueConstraint, text
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    DateTime,
+    ForeignKey,
+    Index,
+    Integer,
+    JSON,
+    Numeric,
+    String,
+    Text,
+    UniqueConstraint,
+    text,
+)
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.base import Base, TimestampMixin, utc_now, uuid_str
@@ -73,6 +86,41 @@ class GameSession(TimestampMixin, Base):
     device: Mapped[Device] = relationship(back_populates="sessions")
     button_batches: Mapped[list["ButtonBatch"]] = relationship(back_populates="session")
     pressure_batches: Mapped[list["PressureBatch"]] = relationship(back_populates="session")
+    gameplay_metrics: Mapped["GameplayMetrics | None"] = relationship(back_populates="session")
+
+
+class GameplayMetrics(TimestampMixin, Base):
+    __tablename__ = "gameplay_metrics"
+    __table_args__ = (
+        UniqueConstraint("session_id", name="uq_gameplay_metrics_session_id"),
+        CheckConstraint("total_stimuli >= 0", name="ck_gameplay_metrics_total_stimuli_non_negative"),
+        CheckConstraint("hits >= 0", name="ck_gameplay_metrics_hits_non_negative"),
+        CheckConstraint("errors >= 0", name="ck_gameplay_metrics_errors_non_negative"),
+        CheckConstraint("missed_stimuli >= 0", name="ck_gameplay_metrics_missed_stimuli_non_negative"),
+        CheckConstraint("score >= 0", name="ck_gameplay_metrics_score_non_negative"),
+        CheckConstraint("max_combo >= 0", name="ck_gameplay_metrics_max_combo_non_negative"),
+    )
+
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=uuid_str)
+    session_id: Mapped[str] = mapped_column(ForeignKey("game_sessions.id"), nullable=False, index=True)
+    user_id: Mapped[str] = mapped_column(ForeignKey("users.id"), nullable=False, index=True)
+    hand: Mapped[str] = mapped_column(String(10), nullable=False)
+    mode: Mapped[str] = mapped_column(String(20), nullable=False)
+    total_stimuli: Mapped[int] = mapped_column(Integer, nullable=False)
+    hits: Mapped[int] = mapped_column(Integer, nullable=False)
+    errors: Mapped[int] = mapped_column(Integer, nullable=False)
+    missed_stimuli: Mapped[int] = mapped_column(Integer, nullable=False)
+    score: Mapped[int] = mapped_column(Integer, nullable=False)
+    max_combo: Mapped[int] = mapped_column(Integer, nullable=False)
+    avg_reaction_ms: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    best_reaction_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    worst_reaction_ms: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    accuracy_rate: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    error_rate: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    missed_rate: Mapped[Decimal | None] = mapped_column(Numeric, nullable=True)
+    precision_by_lane: Mapped[dict | None] = mapped_column(JSON, nullable=True)
+
+    session: Mapped[GameSession] = relationship(back_populates="gameplay_metrics")
 
 
 class ButtonBatch(Base):

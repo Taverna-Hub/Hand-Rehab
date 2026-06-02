@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import datetime
+
 from pydantic import BaseModel
 
 
@@ -33,3 +35,28 @@ class UserSummary(BaseModel):
     total_pressure_readings: int
     pressure_raw_avg: float | None = None
     pressure_raw_max: int | None = None
+
+
+class GameplayMetricsRead(BaseModel):
+    session_id: str
+    user_id: str
+    user_name: str
+    device_id: str
+    hand: str
+    mode: str
+    duration_seconds: int | None
+    started_at: datetime
+    finished_at: datetime | None
+    total_stimuli: int
+    hits: int
+    errors: int
+    missed_stimuli: int
+    score: int
+    max_combo: int
+    avg_reaction_ms: float | None
+    best_reaction_ms: int | None
+    worst_reaction_ms: int | None
+    accuracy_rate: float | None
+    error_rate: float | None
+    missed_rate: float | None
+    precision_by_lane: dict[str, float]
