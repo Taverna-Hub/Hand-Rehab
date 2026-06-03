@@ -1,3 +1,0 @@
-strategy,complexity_insert,complexity_remove,production_default,notes
-ring_buffer,O(1),O(1),true,Fixed capacity with head/tail indexes and drop counter.
-inefficient_shift_buffer,O(1),O(n),false,Academic comparison that shifts elements on pop.

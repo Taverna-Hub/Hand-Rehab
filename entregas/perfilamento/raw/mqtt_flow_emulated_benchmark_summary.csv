@@ -1,0 +1,7 @@
+scenario,strategy,records,latency_us_avg_mean,latency_us_avg_std,latency_us_max_mean,dropped_samples_mean,min_free_heap_bytes_mean,mqtt_publish_latency_us_mean,backend_runs
+baseline,inefficient_shift_buffer,15,46.821,38.268,96.0,1.533,184537.667,100.0,5
+baseline,ring_buffer,15,10.709,0.902,18.2,0.6,185374.467,88.8,5
+network_jitter,inefficient_shift_buffer,15,55.136,45.284,110.8,2.867,184330.667,101.333,5
+network_jitter,ring_buffer,15,12.707,1.242,20.733,1.333,185234.733,76.8,5
+stress,inefficient_shift_buffer,15,66.991,54.31,136.733,3.667,184233.467,99.8,5
+stress,ring_buffer,15,14.866,0.907,24.267,2.2,185076.067,95.867,5
