@@ -1,15 +1,15 @@
 """add gameplay metrics
 
-Revision ID: 20260602_0004
-Revises: 20260530_0003
+Revision ID: 20260602_0006
+Revises: 20260602_0005
 Create Date: 2026-06-02 00:00:00.000000
 """
 
 from alembic import op
 import sqlalchemy as sa
 
-revision = "20260602_0004"
-down_revision = "20260530_0003"
+revision = "20260602_0006"
+down_revision = "20260602_0005"
 branch_labels = None
 depends_on = None
 
