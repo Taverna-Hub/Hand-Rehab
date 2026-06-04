@@ -23,7 +23,7 @@ function statusLabel(status: BenchmarkStatus) {
     cancelled: "cancelado",
     completed: "concluido",
     failed: "falhou",
-    running: "em execucao",
+    running: "em execução",
   };
   return labels[status];
 }
@@ -138,7 +138,7 @@ export function BenchmarkDashboard({ onBack }: { onBack: () => void }) {
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Telemetria tecnica</p>
-            <h1 className="mt-1 text-3xl font-semibold text-slate-950">Metricas de Buffer</h1>
+            <h1 className="mt-1 text-3xl font-semibold text-slate-950">Métricas de Buffer</h1>
             <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
               Benchmarks isolados da partida com N=100, N=5000 e N=20000 para Ring Buffer e deslocamento O(n).
             </p>
@@ -227,7 +227,7 @@ export function BenchmarkDashboard({ onBack }: { onBack: () => void }) {
                     <div>
                       <h2 className="text-lg font-semibold text-slate-950">Run {selectedRun.id.slice(0, 8)}</h2>
                       <p className="mt-1 text-sm text-slate-500">
-                        {selectedRun.device_id} | {selectedRun.iterations} iteracoes | {selectedRun.last_status ?? "aguardando"}
+                        {selectedRun.device_id} | {selectedRun.iterations} iterações | {selectedRun.last_status ?? "aguardando"}
                       </p>
                     </div>
                     {selectedRun.error ? <span className="text-sm font-semibold text-rose-600">{selectedRun.error}</span> : null}
@@ -237,8 +237,8 @@ export function BenchmarkDashboard({ onBack }: { onBack: () => void }) {
                   </div>
                 </div>
 
-                <LatencyChart metric="latency_us_avg" run={selectedRun} title="Latencia media por operacao" />
-                <LatencyChart metric="latency_us_max" run={selectedRun} title="Latencia maxima por operacao" />
+                <LatencyChart metric="latency_us_avg" run={selectedRun} title="Latência média por operação" />
+                <LatencyChart metric="latency_us_max" run={selectedRun} title="Latência máxima por operação" />
                 <BenchmarkTable run={selectedRun} />
               </>
             ) : (
@@ -352,7 +352,7 @@ function BenchmarkTable({ run }: { run: BenchmarkRunRead }) {
   return (
     <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
       <div className="border-b border-slate-100 p-4">
-        <h2 className="text-lg font-semibold text-slate-950">Heap, duracao e drops</h2>
+        <h2 className="text-lg font-semibold text-slate-950">Heap, duração e drops</h2>
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">

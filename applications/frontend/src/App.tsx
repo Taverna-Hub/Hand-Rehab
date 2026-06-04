@@ -166,7 +166,7 @@ function sexLabel(sex: Sex) {
   const labels: Record<Sex, string> = {
     female: "Feminino",
     male: "Masculino",
-    not_informed: "Nao informado",
+    not_informed: "Não informado",
     other: "Outro",
   };
   return labels[sex];
@@ -205,7 +205,7 @@ function describeRealtimeEvent(event: RealtimeEvent): LastInput {
 
   return {
     id: now,
-    label: event.event_type ?? event.status ?? "sessao",
+    label: event.event_type ?? event.status ?? "sessão",
     meta: `${event.device_id} | ${event.timestamp_ms} ms`,
   };
 }
@@ -411,7 +411,7 @@ export default function App() {
       setUiMode(gameModeToUiMode(session.mode));
       setHand(session.hand);
       setSelectedUserId(session.user_id);
-      setSessionSignal("sessao ativa");
+      setSessionSignal("sessão ativa");
       resetLocalGame();
     },
     [resetLocalGame],
@@ -527,7 +527,7 @@ export default function App() {
       recordRealtimeInput(event);
 
       if (isSessionEvent(event)) {
-        setSessionSignal(event.event_type ?? event.status ?? "sessao");
+        setSessionSignal(event.event_type ?? event.status ?? "sessão");
         return;
       }
 
@@ -743,7 +743,7 @@ export default function App() {
                 type="button"
                 onClick={() => setScreen("benchmarks")}
               >
-                Metricas de Buffer
+                Métricas de Buffer
               </button>
               <button
                 className="h-10 rounded-lg border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:border-slate-500 disabled:cursor-not-allowed disabled:opacity-50"
@@ -751,7 +751,7 @@ export default function App() {
                 type="button"
                 onClick={() => setScreen("setup")}
               >
-                Configurar sessao
+                Configurar sessão
               </button>
             </div>
           </header>
@@ -759,20 +759,20 @@ export default function App() {
           <section className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <Metric label="Taxa de acertos" value={formatPercent(dashboardSummary.averageAccuracy)} />
             <Metric label="Taxa de erros" value={formatPercent(dashboardSummary.averageError)} />
-            <Metric label="Estimulos perdidos" value={formatPercent(dashboardSummary.averageMissed)} />
-            <Metric label="Reacao media" value={formatMs(dashboardSummary.averageReaction)} />
-            <Metric label="Melhor reacao" value={formatMs(dashboardSummary.bestReaction)} />
-            <Metric label="Pior reacao" value={formatMs(dashboardSummary.worstReaction)} />
+            <Metric label="Estímulos perdidos" value={formatPercent(dashboardSummary.averageMissed)} />
+            <Metric label="Reação média" value={formatMs(dashboardSummary.averageReaction)} />
+            <Metric label="Melhor reação" value={formatMs(dashboardSummary.bestReaction)} />
+            <Metric label="Pior reação" value={formatMs(dashboardSummary.worstReaction)} />
             <Metric label="Maior sequencia" value={dashboardSummary.bestCombo} />
-            <Metric label="Sessoes realizadas" value={dashboardSummary.finishedSessions} />
+            <Metric label="Sessões realizadas" value={dashboardSummary.finishedSessions} />
           </section>
 
           <section className="grid flex-1 gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
             <div className="rounded-lg border border-slate-200 bg-white shadow-sm">
               <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-100 p-4">
                 <div>
-                  <h2 className="text-lg font-semibold text-slate-950">Sessoes finalizadas</h2>
-                  <p className="mt-1 text-sm text-slate-500">Historico salvo ao encerrar o jogo.</p>
+                  <h2 className="text-lg font-semibold text-slate-950">Sessões finalizadas</h2>
+                  <p className="mt-1 text-sm text-slate-500">Histórico salvo ao encerrar o jogo.</p>
                 </div>
                 <span className="rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-semibold text-slate-600">
                   Score total {dashboardSummary.totalScore.toLocaleString("pt-BR")}
@@ -786,12 +786,12 @@ export default function App() {
                     <span className="text-right">Acertos</span>
                     <span className="text-right">Erros</span>
                     <span className="text-right">Perdidos</span>
-                    <span className="text-right">Reacao</span>
+                    <span className="text-right">Reação</span>
                     <span className="text-right">Combo</span>
                     <span className="text-right">Score</span>
                   </div>
                   {dashboardMetrics.length === 0 ? (
-                    <p className="px-4 py-6 text-sm text-slate-500">Nenhuma sessao finalizada com metricas ainda.</p>
+                    <p className="px-4 py-6 text-sm text-slate-500">Nenhuma sessão finalizada com métricas ainda.</p>
                   ) : (
                     dashboardMetrics.map((metric) => (
                       <div
@@ -801,7 +801,7 @@ export default function App() {
                         <div className="min-w-0">
                           <p className="truncate font-medium text-slate-900">{metric.user_name}</p>
                           <p className="text-xs text-slate-500">
-                            {formatDateTime(metric.finished_at)} | {modeLabel(metric.mode)} | mao {handLabel(metric.hand)}
+                            {formatDateTime(metric.finished_at)} | {modeLabel(metric.mode)} | mão {handLabel(metric.hand)}
                           </p>
                         </div>
                         <span className="self-center text-right tabular-nums">{formatPercent(metric.accuracy_rate)}</span>
@@ -818,11 +818,11 @@ export default function App() {
             </div>
 
             <aside className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-              <h2 className="text-lg font-semibold text-slate-950">Precisao por dedo</h2>
-              <p className="mt-1 text-sm text-slate-500">Ultimas sessoes com 4 faixas.</p>
+              <h2 className="text-lg font-semibold text-slate-950">Precisão por dedo</h2>
+              <p className="mt-1 text-sm text-slate-500">Últimas sessões com 4 faixas.</p>
               <div className="mt-4 space-y-4">
                 {dashboardMetrics.filter((metric) => metric.mode === "buttons").length === 0 ? (
-                  <p className="text-sm text-slate-500">Sem sessoes de botoes ainda.</p>
+                  <p className="text-sm text-slate-500">Sem sessões de botões ainda.</p>
                 ) : (
                   dashboardMetrics
                     .filter((metric) => metric.mode === "buttons")
@@ -874,7 +874,7 @@ export default function App() {
                   <div>
                     <h1 className="text-3xl font-semibold text-slate-950">Hand Rehab</h1>
                     <p className="mt-2 max-w-xl text-sm leading-6 text-slate-500">
-                      Configure paciente, modo e mao antes de iniciar. Depois a pista ocupa a tela inteira.
+                      Configure paciente, modo e mão antes de iniciar. Depois a pista ocupa a tela inteira.
                     </p>
                   </div>
                   <div className="flex flex-wrap items-center gap-2">
@@ -891,7 +891,7 @@ export default function App() {
                       type="button"
                       onClick={() => setScreen("benchmarks")}
                     >
-                      Metricas
+                      Métricas
                     </button>
                   </div>
                 </div>
@@ -901,14 +901,14 @@ export default function App() {
                     active={uiMode === "single"}
                     disabled={apiBusy}
                     label="1 faixa"
-                    meta="Pressao"
+                    meta="Pressão"
                     onClick={() => setUiMode("single")}
                   />
                   <ChoiceButton
                     active={uiMode === "four"}
                     disabled={apiBusy}
                     label="4 faixas"
-                    meta="Botoes"
+                    meta="Botões"
                     onClick={() => setUiMode("four")}
                   />
                 </div>
@@ -917,14 +917,14 @@ export default function App() {
                   <ChoiceButton
                     active={hand === "left"}
                     disabled={apiBusy}
-                    label="Mao esquerda"
+                    label="Mão esquerda"
                     meta="left"
                     onClick={() => setHand("left")}
                   />
                   <ChoiceButton
                     active={hand === "right"}
                     disabled={apiBusy}
-                    label="Mao direita"
+                    label="Mão direita"
                     meta="right"
                     onClick={() => setHand("right")}
                   />
@@ -933,7 +933,7 @@ export default function App() {
                 <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <label className="text-xs font-semibold uppercase text-slate-500" htmlFor="threshold">
-                      Limiar da pressao
+                      Limiar da pressão
                     </label>
                     <span className="text-sm font-semibold tabular-nums text-slate-900">{threshold.toFixed(2)} kPa</span>
                   </div>
@@ -952,7 +952,7 @@ export default function App() {
               </div>
 
               <div className="mt-5 rounded-lg border border-slate-200 bg-slate-50 p-3 text-xs text-slate-600">
-                <p className="font-semibold text-slate-800">Conexoes</p>
+                <p className="font-semibold text-slate-800">Conexões</p>
                 <p className="mt-1">API {backendApiUrl().replace(/^https?:\/\//, "")}</p>
                 <p>Node-RED {sessionSignal}</p>
               </div>
@@ -1012,7 +1012,7 @@ export default function App() {
                     value={newUserSex}
                     onChange={(event) => setNewUserSex(event.target.value as Sex)}
                   >
-                    <option value="not_informed">Nao informado</option>
+                    <option value="not_informed">Não informado</option>
                     <option value="female">Feminino</option>
                     <option value="male">Masculino</option>
                     <option value="other">Outro</option>
@@ -1059,7 +1059,7 @@ export default function App() {
               {activeUiMode === "single" ? "1 faixa" : "4 faixas"}
             </span>
             <span className="rounded-full border border-white/10 bg-white/10 px-3 py-2 text-xs font-semibold text-slate-200">
-              {hand === "left" ? "Mao esquerda" : "Mao direita"}
+              {hand === "left" ? "Mão esquerda" : "Mão direita"}
             </span>
             <button
               className="h-9 rounded-lg border border-white/20 bg-white/10 px-4 text-sm font-semibold text-white transition hover:bg-white/20 disabled:cursor-not-allowed disabled:opacity-50"
