@@ -17,6 +17,8 @@ import {
   Trophy,
   UserPlus,
   Users,
+  Volume2,
+  VolumeX,
   X,
 } from "lucide-react";
 import {
@@ -35,6 +37,12 @@ import {
 } from "./api/backendClient";
 import { BenchmarkDashboard } from "./BenchmarkDashboard";
 import { createNodeRedRealtimeClient, type RealtimeConnectionStatus } from "./realtime/nodeRedClient";
+import logo from "./assets/pictures/logo.png";
+import gameMusic from "./assets/sounds/music.mp3";
+import lossStreakSound from "./assets/sounds/loss_streak.ogg";
+import mistakeSound from "./assets/sounds/mistake.ogg";
+import successSound from "./assets/sounds/success.ogg";
+import upgradeStreakSound from "./assets/sounds/upgrade_streak.ogg";
 import type {
   GameMode,
   Hand,
@@ -54,10 +62,11 @@ const MISS_GRACE_MS = 90;
 const NOTE_FADE_MS = 650;
 const FEEDBACK_LIFETIME_MS = 1_250;
 const PRESSURE_HIT_KPA = 0.5;
+const HOLD_NOTE_DURATION_MS = BEAT_INTERVAL_MS * 2;
 
 const FOUR_LANE_PATTERN = [1, 2, 3, 4, 2, 4, 1, 3, 1, 4, 2, 3];
 
-type NoteStatus = "pending" | "hit" | "miss";
+type NoteStatus = "pending" | "holding" | "hit" | "miss";
 type HitQuality = "perfect" | "good";
 type FeedbackTone = "hit" | "miss" | "neutral";
 type IconType = typeof Users;
@@ -80,6 +89,8 @@ interface ActiveNote {
   laneId: number;
   hitAt: number;
   status: NoteStatus;
+  type: "tap" | "hold";
+  holdUntil?: number;
   judgedAt?: number;
   quality?: HitQuality;
 }
@@ -114,6 +125,8 @@ interface Feedback {
   tone: FeedbackTone;
   laneId: number;
 }
+
+type LaneCooldowns = Record<number, number>;
 
 const LANES: Record<number, LaneDefinition> = {
   1: { id: 1, label: "Vermelho", color: "#dc2626", soft: "rgba(220, 38, 38, 0.18)", line: "rgba(248, 113, 113, 0.62)" },
@@ -287,14 +300,85 @@ function noteTopPercent(note: ActiveNote, now: number) {
   return progress * 100 - 8;
 }
 
-function makeNote(sessionId: string, beatIndex: number, mode: GameMode, gameStart: number): ActiveNote {
-  const laneId = mode === "pressure" ? 1 : FOUR_LANE_PATTERN[beatIndex % FOUR_LANE_PATTERN.length];
+function noteHoldEndTopPercent(note: ActiveNote, now: number) {
+  const progress = 1 - ((note.holdUntil ?? note.hitAt) - now) / NOTE_LEAD_MS;
+  return progress * 100 - 8;
+}
+
+function seededChance(seed: string) {
+  let hash = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    hash ^= seed.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0) / 4294967295;
+}
+
+function shuffledLanes(sessionId: string, beatIndex: number, lanes: number[]) {
+  return [...lanes].sort(
+    (left, right) =>
+      seededChance(`${sessionId}-${beatIndex}-lane-${left}`) -
+      seededChance(`${sessionId}-${beatIndex}-lane-${right}`),
+  );
+}
+
+function buildNote(sessionId: string, beatIndex: number, laneId: number, gameStart: number, type: "tap" | "hold"): ActiveNote {
+  const hitAt = gameStart + NOTE_LEAD_MS + beatIndex * BEAT_INTERVAL_MS;
   return {
-    hitAt: gameStart + NOTE_LEAD_MS + beatIndex * BEAT_INTERVAL_MS,
-    id: `${sessionId}-${beatIndex}`,
+    hitAt,
+    holdUntil: type === "hold" ? hitAt + HOLD_NOTE_DURATION_MS : undefined,
+    id: `${sessionId}-${beatIndex}-${laneId}`,
     laneId,
     status: "pending",
+    type,
   };
+}
+
+function makeNotes(sessionId: string, beatIndex: number, mode: GameMode, gameStart: number, laneCooldowns: LaneCooldowns): ActiveNote[] {
+  const hitAt = gameStart + NOTE_LEAD_MS + beatIndex * BEAT_INTERVAL_MS;
+  const allLanes = mode === "pressure" ? [1] : [1, 2, 3, 4];
+  const availableLanes = allLanes.filter((laneId) => beatIndex > (laneCooldowns[laneId] ?? -1));
+
+  if (availableLanes.length === 0) {
+    return [];
+  }
+
+  const holdRoll = seededChance(`${sessionId}-${beatIndex}-hold`);
+  const gapRoll = seededChance(`${sessionId}-${beatIndex}-gap`);
+  const shouldHold = beatIndex > 7 && holdRoll < (mode === "pressure" ? 0.06 : 0.08);
+
+  if (shouldHold) {
+    const chordRoll = seededChance(`${sessionId}-${beatIndex}-hold-chord`);
+    const holdCount = mode === "pressure" || availableLanes.length === 1
+      ? 1
+      : chordRoll > 0.97 && availableLanes.length >= 3
+        ? 3
+        : chordRoll > 0.84
+          ? 2
+          : 1;
+    const lanes = shuffledLanes(sessionId, beatIndex, availableLanes).slice(0, holdCount);
+    for (const laneId of lanes) {
+      laneCooldowns[laneId] = beatIndex + Math.ceil((hitAt + HOLD_NOTE_DURATION_MS - hitAt) / BEAT_INTERVAL_MS) + 1;
+    }
+    return lanes.map((laneId) => buildNote(sessionId, beatIndex, laneId, gameStart, "hold"));
+  }
+
+  if (gapRoll > 0.9) {
+    return [];
+  }
+
+  const chordRoll = seededChance(`${sessionId}-${beatIndex}-tap-chord`);
+  const tapCount = mode === "pressure" || availableLanes.length === 1
+    ? 1
+    : chordRoll > 0.9
+      ? 2
+      : 1;
+  const preferredLane = FOUR_LANE_PATTERN[beatIndex % FOUR_LANE_PATTERN.length];
+  const lanes = availableLanes.includes(preferredLane)
+    ? [preferredLane, ...shuffledLanes(sessionId, beatIndex, availableLanes.filter((laneId) => laneId !== preferredLane))]
+    : shuffledLanes(sessionId, beatIndex, availableLanes);
+
+  return lanes.slice(0, tapCount).map((laneId) => buildNote(sessionId, beatIndex, laneId, gameStart, "tap"));
 }
 
 function percent(numerator: number, denominator: number) {
@@ -423,6 +507,7 @@ export default function App() {
   const [pressedLanes, setPressedLanes] = useState<Record<number, boolean>>({});
   const [pressureValue, setPressureValue] = useState<number | null>(null);
   const [pressureActive, setPressureActive] = useState(false);
+  const [gameMusicMuted, setGameMusicMuted] = useState(false);
   const [lastInputs, setLastInputs] = useState<LastInput[]>([]);
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [sessionSignal, setSessionSignal] = useState("aguardando");
@@ -434,10 +519,18 @@ export default function App() {
   const activeSessionRef = useRef<GameSessionRead | null>(null);
   const notesRef = useRef<ActiveNote[]>([]);
   const statsRef = useRef<ScoreStats>(stats);
+  const pressedLanesRef = useRef<Record<number, boolean>>({});
+  const pressureActiveRef = useRef(false);
   const pressureAboveThresholdRef = useRef(false);
   const localGameStartRef = useRef<number | null>(null);
   const nextBeatIndexRef = useRef(0);
+  const noteLaneCooldownsRef = useRef<LaneCooldowns>({});
   const feedbackIdRef = useRef(0);
+  const gameMusicRef = useRef<HTMLAudioElement | null>(null);
+  const lossStreakSoundRef = useRef<HTMLAudioElement | null>(null);
+  const mistakeSoundRef = useRef<HTMLAudioElement | null>(null);
+  const successSoundRef = useRef<HTMLAudioElement | null>(null);
+  const upgradeStreakSoundRef = useRef<HTMLAudioElement | null>(null);
 
   const routeUserId = route.name === "patient" || route.name === "play" ? route.userId : "";
   const currentUserId = routeUserId || selectedUserId;
@@ -454,6 +547,73 @@ export default function App() {
   );
   const dashboardSummary = useMemo(() => summarizeMetrics(patientMetrics), [patientMetrics]);
   const globalSummary = useMemo(() => summarizeMetrics(dashboardMetrics), [dashboardMetrics]);
+
+  const startGameMusic = useCallback(() => {
+    if (!gameMusicRef.current) {
+      gameMusicRef.current = new Audio(gameMusic);
+      gameMusicRef.current.loop = true;
+      gameMusicRef.current.volume = 0.05;
+    }
+
+    gameMusicRef.current.volume = 0.05;
+    gameMusicRef.current.muted = gameMusicMuted;
+    return gameMusicRef.current.play().catch(() => undefined);
+  }, [gameMusicMuted]);
+
+  const stopGameMusic = useCallback(() => {
+    if (!gameMusicRef.current) {
+      return;
+    }
+
+    gameMusicRef.current.pause();
+    gameMusicRef.current.currentTime = 0;
+  }, []);
+
+  const handleGameMusicMutedChange = useCallback((muted: boolean) => {
+    setGameMusicMuted(muted);
+    if (gameMusicRef.current) {
+      gameMusicRef.current.muted = muted;
+      gameMusicRef.current.volume = 0.5;
+    }
+    if (successSoundRef.current) {
+      successSoundRef.current.muted = muted;
+    }
+    if (mistakeSoundRef.current) {
+      mistakeSoundRef.current.muted = muted;
+    }
+    if (upgradeStreakSoundRef.current) {
+      upgradeStreakSoundRef.current.muted = muted;
+    }
+    if (lossStreakSoundRef.current) {
+      lossStreakSoundRef.current.muted = muted;
+    }
+  }, []);
+
+  const playGameSound = useCallback(
+    (type: "success" | "mistake" | "upgradeStreak" | "lossStreak") => {
+      if (gameMusicMuted || route.name !== "play") {
+        return;
+      }
+
+      const soundConfig = {
+        lossStreak: { ref: lossStreakSoundRef, src: lossStreakSound, volume: 0.62 },
+        mistake: { ref: mistakeSoundRef, src: mistakeSound, volume: 0.48 },
+        success: { ref: successSoundRef, src: successSound, volume: 0.55 },
+        upgradeStreak: { ref: upgradeStreakSoundRef, src: upgradeStreakSound, volume: 0.66 },
+      }[type];
+      const sourceRef = soundConfig.ref;
+      if (!sourceRef.current) {
+        sourceRef.current = new Audio(soundConfig.src);
+        sourceRef.current.volume = soundConfig.volume;
+      }
+
+      const sound = sourceRef.current.cloneNode(true) as HTMLAudioElement;
+      sound.volume = sourceRef.current.volume;
+      sound.muted = gameMusicMuted;
+      void sound.play().catch(() => undefined);
+    },
+    [gameMusicMuted, route.name],
+  );
   const elapsedSeconds = activeSession
     ? Math.max(0, Math.floor((Date.now() - Date.parse(activeSession.started_at)) / 1000))
     : 0;
@@ -469,12 +629,31 @@ export default function App() {
   }, [activeSession]);
 
   useEffect(() => {
+    if (route.name === "play" && activeSession) {
+      void startGameMusic();
+      return;
+    }
+
+    stopGameMusic();
+  }, [activeSession, route.name, startGameMusic, stopGameMusic]);
+
+  useEffect(() => () => stopGameMusic(), [stopGameMusic]);
+
+  useEffect(() => {
     notesRef.current = notes;
   }, [notes]);
 
   useEffect(() => {
     statsRef.current = stats;
   }, [stats]);
+
+  useEffect(() => {
+    pressedLanesRef.current = pressedLanes;
+  }, [pressedLanes]);
+
+  useEffect(() => {
+    pressureActiveRef.current = pressureActive;
+  }, [pressureActive]);
 
   const pushFeedback = useCallback((label: string, tone: FeedbackTone, laneId = 1) => {
     feedbackIdRef.current += 1;
@@ -494,6 +673,7 @@ export default function App() {
     const now = performance.now();
     localGameStartRef.current = now;
     nextBeatIndexRef.current = 0;
+    noteLaneCooldownsRef.current = {};
     notesRef.current = [];
     pressureAboveThresholdRef.current = false;
     setKeyboardInputActive(false);
@@ -566,33 +746,16 @@ export default function App() {
   const registerError = useCallback(
     (label = "Erro", laneId = 1) => {
       setStats((current) => ({ ...current, combo: 0, errors: current.errors + 1 }));
+      playGameSound("mistake");
       pushFeedback(label, "miss", laneId);
     },
-    [pushFeedback],
+    [playGameSound, pushFeedback],
   );
 
-  const registerHit = useCallback(
-    (laneId: number, inputTime = performance.now()) => {
-      const candidate = notesRef.current
-        .filter((note) => note.status === "pending" && note.laneId === laneId)
-        .map((note) => ({ note, delta: Math.abs(note.hitAt - inputTime) }))
-        .filter(({ delta }) => delta <= HIT_WINDOW_MS)
-        .sort((left, right) => left.delta - right.delta)[0];
-
-      if (!candidate) {
-        registerError("Fora", laneId);
-        return;
-      }
-
-      const quality: HitQuality = candidate.delta <= PERFECT_WINDOW_MS ? "perfect" : "good";
+  const awardHit = useCallback(
+    (laneId: number, quality: HitQuality, reactionMs: number, pointsBonus = 0) => {
       const points = quality === "perfect" ? 120 : 80;
-      const judgedAt = inputTime;
-      const reactionMs = Math.round(candidate.delta);
-      const nextNotes = notesRef.current.map((note) =>
-        note.id === candidate.note.id ? { ...note, judgedAt, quality, status: "hit" as const } : note,
-      );
-      notesRef.current = nextNotes;
-      setNotes(nextNotes);
+      playGameSound("success");
       setStats((current) => {
         const combo = current.combo + 1;
         return {
@@ -610,12 +773,80 @@ export default function App() {
           maxCombo: Math.max(current.maxCombo, combo),
           perfects: current.perfects + (quality === "perfect" ? 1 : 0),
           reactionTimesMs: [...current.reactionTimesMs, reactionMs],
-          score: current.score + points + Math.min(current.combo * 2, 50),
+          score: current.score + points + pointsBonus + Math.min(current.combo * 2, 50),
         };
       });
+    },
+    [playGameSound],
+  );
+
+  const releaseHold = useCallback(
+    (laneId: number, inputTime = performance.now()) => {
+      const holdingNote = notesRef.current.find((note) => note.status === "holding" && note.laneId === laneId);
+      if (!holdingNote) {
+        return;
+      }
+
+      const holdUntil = holdingNote.holdUntil ?? holdingNote.hitAt;
+      const completed = inputTime >= holdUntil - HIT_WINDOW_MS;
+      const nextNotes = notesRef.current.map((note) =>
+        note.id === holdingNote.id
+          ? { ...note, judgedAt: inputTime, status: completed ? "hit" as const : "miss" as const }
+          : note,
+      );
+      notesRef.current = nextNotes;
+      setNotes(nextNotes);
+
+      if (completed) {
+        awardHit(laneId, holdingNote.quality ?? "good", Math.max(0, Math.round(inputTime - holdingNote.hitAt)), 180);
+        pushFeedback("Segurou", "hit", laneId);
+        return;
+      }
+
+      registerError("Soltou", laneId);
+    },
+    [awardHit, pushFeedback, registerError],
+  );
+
+  const registerHit = useCallback(
+    (laneId: number, inputTime = performance.now()) => {
+      if (notesRef.current.some((note) => note.status === "holding" && note.laneId === laneId)) {
+        return;
+      }
+
+      const candidate = notesRef.current
+        .filter((note) => note.status === "pending" && note.laneId === laneId)
+        .map((note) => ({ note, delta: Math.abs(note.hitAt - inputTime) }))
+        .filter(({ delta }) => delta <= HIT_WINDOW_MS)
+        .sort((left, right) => left.delta - right.delta)[0];
+
+      if (!candidate) {
+        registerError("Fora", laneId);
+        return;
+      }
+
+      const quality: HitQuality = candidate.delta <= PERFECT_WINDOW_MS ? "perfect" : "good";
+      const judgedAt = inputTime;
+      const reactionMs = Math.round(candidate.delta);
+      if (candidate.note.type === "hold") {
+        const nextNotes = notesRef.current.map((note) =>
+          note.id === candidate.note.id ? { ...note, judgedAt, quality, status: "holding" as const } : note,
+        );
+        notesRef.current = nextNotes;
+        setNotes(nextNotes);
+        pushFeedback("Segure", "hit", laneId);
+        return;
+      }
+
+      const nextNotes = notesRef.current.map((note) =>
+        note.id === candidate.note.id ? { ...note, judgedAt, quality, status: "hit" as const } : note,
+      );
+      notesRef.current = nextNotes;
+      setNotes(nextNotes);
+      awardHit(laneId, quality, reactionMs);
       pushFeedback(quality === "perfect" ? "Perfeito" : "Bom", "hit", laneId);
     },
-    [pushFeedback, registerError],
+    [awardHit, pushFeedback, registerError],
   );
 
   const recordRealtimeInput = useCallback((event: RealtimeEvent) => {
@@ -646,6 +877,8 @@ export default function App() {
         setPressedLanes((current) => ({ ...current, [event.button_id]: event.event_type === "pressed" }));
         if (event.event_type === "pressed") {
           registerHit(event.button_id);
+        } else {
+          releaseHold(event.button_id);
         }
         return;
       }
@@ -662,11 +895,13 @@ export default function App() {
         setPressureActive(isAboveThreshold);
         if (isAboveThreshold && !pressureAboveThresholdRef.current) {
           registerHit(1);
+        } else if (!isAboveThreshold && pressureAboveThresholdRef.current) {
+          releaseHold(1);
         }
         pressureAboveThresholdRef.current = isAboveThreshold;
       }
     },
-    [recordRealtimeInput, registerHit],
+    [recordRealtimeInput, registerHit, releaseHold],
   );
 
   useEffect(() => {
@@ -738,12 +973,14 @@ export default function App() {
       if (activeSession.mode === "pressure" && (key === " " || key === "spacebar" || key === "1" || key === "a")) {
         setPressureActive(false);
         setPressureValue(null);
+        releaseHold(1);
         return;
       }
 
       const laneId = laneByKey[key];
       if (laneId) {
         setPressedLanes((current) => ({ ...current, [laneId]: false }));
+        releaseHold(laneId);
       }
     };
 
@@ -753,10 +990,10 @@ export default function App() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [activeSession, keyboardInputActive, registerHit]);
+  }, [activeSession, keyboardInputActive, registerHit, releaseHold]);
 
   useEffect(() => {
-    if (!activeSession) {
+    if (!activeSession || route.name !== "play") {
       return;
     }
 
@@ -769,7 +1006,15 @@ export default function App() {
 
       const spawnedNotes: ActiveNote[] = [];
       while (gameStart + nextBeatIndexRef.current * BEAT_INTERVAL_MS <= now) {
-        spawnedNotes.push(makeNote(activeSession.id, nextBeatIndexRef.current, activeSession.mode, gameStart));
+        spawnedNotes.push(
+          ...makeNotes(
+            activeSession.id,
+            nextBeatIndexRef.current,
+            activeSession.mode,
+            gameStart,
+            noteLaneCooldownsRef.current,
+          ),
+        );
         nextBeatIndexRef.current += 1;
       }
 
@@ -778,23 +1023,41 @@ export default function App() {
         counts[note.laneId] = (counts[note.laneId] ?? 0) + 1;
         return counts;
       }, {});
+      const completedHolds: ActiveNote[] = [];
       const next = [...notesRef.current, ...spawnedNotes]
         .map((note) => {
           if (note.status === "pending" && now - note.hitAt > MISS_GRACE_MS) {
             missedByLane[note.laneId] = (missedByLane[note.laneId] ?? 0) + 1;
             return { ...note, judgedAt: now, status: "miss" as const };
           }
+          if (note.status === "holding" && now >= (note.holdUntil ?? note.hitAt)) {
+            const isLaneHeld = activeSession.mode === "pressure"
+              ? pressureActiveRef.current
+              : Boolean(pressedLanesRef.current[note.laneId]);
+            if (isLaneHeld) {
+              completedHolds.push(note);
+              return { ...note, judgedAt: now, status: "hit" as const };
+            }
+            missedByLane[note.laneId] = (missedByLane[note.laneId] ?? 0) + 1;
+            return { ...note, judgedAt: now, status: "miss" as const };
+          }
           return note;
         })
         .filter((note) => {
-          if (note.status === "pending") {
-            return note.hitAt - now > -1_200;
+          if (note.status === "pending" || note.status === "holding") {
+            return (note.holdUntil ?? note.hitAt) - now > -1_200;
           }
           return now - (note.judgedAt ?? note.hitAt) < NOTE_FADE_MS;
         });
 
+      for (const note of completedHolds) {
+        awardHit(note.laneId, note.quality ?? "good", Math.max(0, Math.round(now - note.hitAt)), 180);
+        pushFeedback("Segurou", "hit", note.laneId);
+      }
+
       const missed = Object.values(missedByLane).reduce((total, amount) => total + amount, 0);
       if (missed > 0) {
+        playGameSound("mistake");
         setStats((currentStats) => ({
           ...currentStats,
           combo: 0,
@@ -826,7 +1089,7 @@ export default function App() {
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [activeSession, pushFeedback]);
+  }, [activeSession, awardHit, playGameSound, pushFeedback, route.name]);
 
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -865,6 +1128,7 @@ export default function App() {
       });
       applyActiveSession(session);
       navigate({ name: "play", userId: session.user_id });
+      void startGameMusic();
       pushFeedback("Vai", "neutral");
     } catch (error) {
       if (error instanceof Error && error.message === "active_session_exists") {
@@ -872,6 +1136,7 @@ export default function App() {
         if (sessions[0]) {
           applyActiveSession(sessions[0]);
           navigate({ name: "play", userId: sessions[0].user_id });
+          void startGameMusic();
         }
       } else {
         setApiError(error instanceof Error ? error.message : "erro_ao_iniciar");
@@ -901,6 +1166,7 @@ export default function App() {
       if (metrics !== dashboardMetrics) {
         setMetricsError(null);
       }
+      stopGameMusic();
       setActiveSession(null);
       setSessionSignal("finalizada");
       resetLocalGame();
@@ -965,6 +1231,7 @@ export default function App() {
         elapsedSeconds={elapsedSeconds}
         feedbacks={feedbacks}
         hand={hand}
+        musicMuted={gameMusicMuted}
         keyboardInputActive={keyboardInputActive}
         laneGridStyle={laneGridStyle}
         notes={notes}
@@ -974,6 +1241,8 @@ export default function App() {
         pressureValue={pressureValue}
         stats={stats}
         onFinish={handleFinishSession}
+        onMusicMutedChange={handleGameMusicMutedChange}
+        onStreakSound={playGameSound}
         onKeyboardInputChange={(enabled) => {
           setKeyboardInputActive(enabled);
           if (!enabled) {
@@ -1064,12 +1333,9 @@ function ShellHeader({
     <main className="app-shell">
       <header className="app-topbar">
         <div className="flex flex-wrap items-center justify-between gap-3">
-          <button className="text-left" type="button" onClick={onPatients}>
-            <p className="brand-eyebrow">Hand Rehab</p>
-            <h1 className="brand-title flex items-center gap-2">
-              <Users aria-hidden className="h-5 w-5 text-[color:var(--dark-goldenrod)]" />
-              Pacientes
-            </h1>
+          <button className="brand-lockup text-left" type="button" onClick={onPatients}>
+            <img className="brand-logo" src={logo} alt="" aria-hidden="true" />
+            <span className="brand-title">Hand Rehab</span>
           </button>
           <div className="flex flex-wrap items-center gap-2">
             <button
@@ -1569,6 +1835,38 @@ function randomMissDrift(noteId: string) {
   return (hash % 2 === 0 ? -1 : 1) * 12;
 }
 
+function comboTier(combo: number) {
+  if (combo >= 40) {
+    return "legend";
+  }
+  if (combo >= 25) {
+    return "super";
+  }
+  if (combo >= 12) {
+    return "hot";
+  }
+  if (combo >= 5) {
+    return "warm";
+  }
+  return "idle";
+}
+
+function comboMultiplier(combo: number) {
+  if (combo >= 40) {
+    return 8;
+  }
+  if (combo >= 25) {
+    return 4;
+  }
+  if (combo >= 12) {
+    return 3;
+  }
+  if (combo >= 5) {
+    return 2;
+  }
+  return 1;
+}
+
 function GameScreen({
   activeLanes,
   activeUiMode,
@@ -1577,6 +1875,7 @@ function GameScreen({
   elapsedSeconds,
   feedbacks,
   hand,
+  musicMuted,
   keyboardInputActive,
   laneGridStyle,
   notes,
@@ -1586,6 +1885,8 @@ function GameScreen({
   pressureValue,
   stats,
   onFinish,
+  onMusicMutedChange,
+  onStreakSound,
   onKeyboardInputChange,
 }: {
   activeLanes: LaneDefinition[];
@@ -1595,6 +1896,7 @@ function GameScreen({
   elapsedSeconds: number;
   feedbacks: Feedback[];
   hand: Hand;
+  musicMuted: boolean;
   keyboardInputActive: boolean;
   laneGridStyle: CSSProperties;
   notes: ActiveNote[];
@@ -1604,20 +1906,74 @@ function GameScreen({
   pressureValue: number | null;
   stats: ScoreStats;
   onFinish: () => void;
+  onMusicMutedChange: (muted: boolean) => void;
+  onStreakSound: (type: "upgradeStreak" | "lossStreak") => void;
   onKeyboardInputChange: (enabled: boolean) => void;
 }) {
+  const previousComboRef = useRef(stats.combo);
+  const previousMultiplierRef = useRef(comboMultiplier(stats.combo));
+  const [comboBreakId, setComboBreakId] = useState(0);
+  const isComboBreak = comboBreakId > 0;
+
+  useEffect(() => {
+    const previousMultiplier = previousMultiplierRef.current;
+    const nextMultiplier = comboMultiplier(stats.combo);
+    if (nextMultiplier > previousMultiplier) {
+      onStreakSound("upgradeStreak");
+    }
+    if (previousComboRef.current >= 3 && stats.combo === 0) {
+      setComboBreakId((current) => current + 1);
+      onStreakSound("lossStreak");
+    }
+    previousComboRef.current = stats.combo;
+    previousMultiplierRef.current = nextMultiplier;
+  }, [onStreakSound, stats.combo]);
+
+  useEffect(() => {
+    if (!isComboBreak) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => setComboBreakId(0), 720);
+    return () => window.clearTimeout(timeout);
+  }, [isComboBreak]);
+
+  const currentComboTier = comboTier(stats.combo);
+  const currentMultiplier = comboMultiplier(stats.combo);
+
   return (
     <main className="h-screen overflow-hidden bg-[color:var(--prussian-blue)] text-white">
       <section className="relative h-full w-full overflow-hidden">
         <div className="game-hud">
           <div className="score-strip">
             <HudStat icon={Trophy} label="Pontos" value={stats.score.toLocaleString("pt-BR")} />
-            <HudStat icon={Target} label="Combo" value={stats.combo} />
-            <HudStat icon={Activity} label="Acertos" value={stats.hits} />
+            <HudStat
+              broken={isComboBreak}
+              icon={Target}
+              label="Combo"
+              pulseKey={stats.combo}
+              tier={currentComboTier}
+              value={stats.combo}
+            />
+            <HudStat icon={Activity} label="Acertos" pulseKey={stats.hits} tier="hit" value={stats.hits} />
             <HudStat icon={Clock3} label="Tempo" value={formatElapsed(elapsedSeconds)} />
           </div>
 
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <button
+              aria-label={musicMuted ? "Desmutar trilha" : "Mutar trilha"}
+              aria-pressed={musicMuted}
+              className={classNames("audio-toggle", musicMuted && "muted")}
+              type="button"
+              onClick={() => onMusicMutedChange(!musicMuted)}
+            >
+              {musicMuted ? (
+                <VolumeX aria-hidden className="h-4 w-4" />
+              ) : (
+                <Volume2 aria-hidden className="h-4 w-4" />
+              )}
+              {musicMuted ? "Mudo" : "Som"}
+            </button>
             <button
               aria-pressed={keyboardInputActive}
               className={classNames("keyboard-toggle", keyboardInputActive && "active")}
@@ -1645,7 +2001,27 @@ function GameScreen({
           </div>
         </div>
 
+        <div className="combo-stage" aria-hidden="true">
+          {currentMultiplier > 1 ? (
+            <div className={classNames("combo-multiplier", `tier-${currentComboTier}`)} key={`combo-${stats.combo}`}>
+              <span className="combo-multiplier-kicker">{stats.combo} hits</span>
+              <span className="combo-multiplier-value">x{currentMultiplier}</span>
+              <span className="combo-multiplier-label">Combo</span>
+              <span className="combo-multiplier-spark spark-a" />
+              <span className="combo-multiplier-spark spark-b" />
+              <span className="combo-multiplier-spark spark-c" />
+              <span className="combo-multiplier-spark spark-d" />
+            </div>
+          ) : null}
+          {isComboBreak ? (
+            <div className="combo-break-overlay" key={`break-${comboBreakId}`}>
+              <span>Combo perdido</span>
+            </div>
+          ) : null}
+        </div>
+
         <div className="rhythm-track absolute inset-0 overflow-hidden bg-[rgba(14,20,40,0.9)]">
+          <img className="game-watermark-logo" src={logo} alt="" aria-hidden="true" />
           <div className="absolute inset-0 grid" style={laneGridStyle}>
             {activeLanes.map((lane) => (
               <div
@@ -1660,30 +2036,52 @@ function GameScreen({
             ))}
           </div>
 
-          <div className="absolute inset-0 z-25 grid" style={laneGridStyle}>
+          <div className="game-notes-layer absolute inset-0 grid" style={laneGridStyle}>
             {activeLanes.map((lane) => (
               <div className="relative" key={lane.id}>
                 {notes
                   .filter((note) => note.laneId === lane.id)
                   .map((note) => {
-                    const top = noteTopPercent(note, nowMs);
                     const isMiss = note.status === "miss";
                     const isHit = note.status === "hit";
+                    const isHolding = note.status === "holding";
+                    const isHold = note.type === "hold";
+                    const visualTime = isHit || isHolding ? note.judgedAt ?? nowMs : nowMs;
+                    const top = noteTopPercent(note, visualTime);
+                    const holdEndTop = isHold ? noteHoldEndTopPercent(note, isHolding ? nowMs : visualTime) : top;
                     const missDrift = isMiss ? randomMissDrift(note.id) : 0;
                     return (
                       <div
+                        className="game-note-position absolute inset-x-0 top-0 h-full"
+                        key={note.id}
+                        style={
+                          {
+                            "--hold-end-top": `${Math.max(0, holdEndTop)}%`,
+                            "--miss-drift": `${missDrift}px`,
+                            "--note-color": lane.color,
+                            "--note-top": `${top}%`,
+                          } as CSSProperties
+                        }
+                      >
+                        {isHold && !isHit ? (
+                          <div
+                            className={classNames(
+                              "game-hold-trail absolute left-1/2 w-[min(34%,40px)] -translate-x-1/2 rounded-full",
+                              isHolding && "holding",
+                              isMiss && "miss",
+                            )}
+                          />
+                        ) : null}
+                        <div
                         className={classNames(
                           "game-note absolute left-1/2 h-12 w-[min(70%,92px)] rounded-full sm:h-14",
+                          isHold && "hold",
+                          isHolding && "holding",
                           isMiss && "miss",
                           isHit && "hit",
                         )}
-                        key={note.id}
-                        style={{
-                          "--miss-drift": `${missDrift}px`,
-                          "--note-color": lane.color,
-                          top: `${top}%`,
-                        } as CSSProperties}
-                      />
+                        />
+                      </div>
                     );
                   })}
               </div>
@@ -1714,7 +2112,33 @@ function GameScreen({
             })}
           </div>
 
-          <div className="pointer-events-none absolute bottom-[5%] left-0 right-0 z-10 grid" style={laneGridStyle}>
+          <div className="pointer-events-none absolute bottom-[5%] left-0 right-0 z-30 grid" style={laneGridStyle}>
+            {activeLanes.map((lane) => {
+              const laneHits = feedbacks.filter((feedback) => feedback.laneId === lane.id && feedback.tone === "hit").slice(-3);
+              return (
+                <div className="relative flex h-14 justify-center overflow-visible" key={lane.id}>
+                  {laneHits.map((feedback) => (
+                    <div
+                      className="neon-hit-burst"
+                      key={feedback.id}
+                      style={{ "--burst-color": lane.color } as CSSProperties}
+                    >
+                      <span />
+                      <span />
+                      <span />
+                      <span />
+                      <span />
+                      <span />
+                      <span />
+                      <span />
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+
+          <div className="pointer-events-none absolute bottom-[5%] left-0 right-0 z-30 grid" style={laneGridStyle}>
             {activeLanes.map((lane) => {
               const laneFeedbacks = feedbacks.filter((feedback) => feedback.laneId === lane.id).slice(-6);
               return (
@@ -1798,13 +2222,27 @@ function ChoiceButton({
   );
 }
 
-function HudStat({ icon: Icon, label, value }: { icon: IconType; label: string; value: number | string }) {
+function HudStat({
+  broken = false,
+  icon: Icon,
+  label,
+  pulseKey,
+  tier = "idle",
+  value,
+}: {
+  broken?: boolean;
+  icon: IconType;
+  label: string;
+  pulseKey?: number | string;
+  tier?: "idle" | "warm" | "hot" | "super" | "legend" | "hit";
+  value: number | string;
+}) {
   return (
-    <div className="hud-stat">
+    <div className={classNames("hud-stat", `tier-${tier}`, pulseKey !== undefined && "hud-stat-pulse", broken && "combo-broken")}>
       <Icon aria-hidden className="hud-stat-icon h-4 w-4" />
       <div>
         <p className="hud-stat-label">{label}</p>
-        <p className="hud-stat-value tabular-nums">{value}</p>
+        <p className="hud-stat-value tabular-nums" key={pulseKey ?? value}>{value}</p>
       </div>
     </div>
   );
@@ -1825,7 +2263,9 @@ function Metric({
     <div className={classNames("metric-card", variant === "dark" && "dark")}>
       <div className="flex items-center justify-between gap-3">
         <p className="metric-label">{label}</p>
-        <Icon aria-hidden className="h-5 w-5 text-[color:var(--dark-goldenrod)]" />
+        <span className="metric-icon-chip">
+          <Icon aria-hidden className="h-5 w-5" />
+        </span>
       </div>
       <p className="metric-value tabular-nums">{value}</p>
     </div>
