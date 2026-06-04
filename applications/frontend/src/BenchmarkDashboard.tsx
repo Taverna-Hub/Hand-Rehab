@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
+import { ArrowLeft, BarChart3, Gauge, Play, RefreshCw, Square, Table2 } from "lucide-react";
 import {
   backendApiUrl,
   cancelBenchmarkRun,
@@ -133,59 +134,63 @@ export function BenchmarkDashboard({ onBack }: { onBack: () => void }) {
   }
 
   return (
-    <main className="min-h-screen bg-[#f4f7fb] px-4 py-5 text-slate-900">
-      <div className="mx-auto w-full max-w-7xl">
+    <main className="app-shell px-8 py-7">
+      <div className="w-full">
         <header className="flex flex-wrap items-start justify-between gap-3">
           <div>
-            <p className="text-xs font-semibold uppercase tracking-[0.18em] text-slate-500">Telemetria tecnica</p>
-            <h1 className="mt-1 text-3xl font-semibold text-slate-950">Métricas de Buffer</h1>
-            <p className="mt-2 max-w-2xl text-sm leading-6 text-slate-500">
+            <p className="brand-eyebrow">Telemetria tecnica</p>
+            <h1 className="page-heading mt-2">Métricas de Buffer</h1>
+            <p className="page-subtitle max-w-2xl">
               Benchmarks isolados da partida com N=100, N=5000 e N=20000 para Ring Buffer e deslocamento O(n).
             </p>
           </div>
           <div className="flex flex-wrap gap-2">
             <button
-              className="h-10 rounded-lg border border-slate-300 bg-white px-4 text-sm font-semibold text-slate-800 transition hover:border-slate-500"
+              className="secondary-button"
               type="button"
               onClick={onBack}
             >
+              <ArrowLeft aria-hidden className="mr-2 h-5 w-5" />
               Jogo
             </button>
             <button
-              className="h-10 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white transition hover:bg-slate-700 disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="primary-button disabled:opacity-50"
               disabled={busy || selectedRun?.status === "running"}
               type="button"
               onClick={handleStartBenchmark}
             >
+              <Play aria-hidden className="mr-2 h-5 w-5" />
               Iniciar benchmark
             </button>
             <button
-              className="h-10 rounded-lg border border-rose-200 bg-rose-50 px-4 text-sm font-semibold text-rose-700 transition hover:border-rose-400 disabled:cursor-not-allowed disabled:border-slate-200 disabled:bg-slate-100 disabled:text-slate-300"
+              className="secondary-button disabled:opacity-45"
               disabled={busy || selectedRun?.status !== "running"}
               type="button"
               onClick={handleCancelBenchmark}
             >
+              <Square aria-hidden className="mr-2 h-5 w-5" />
               Encerrar
             </button>
           </div>
         </header>
 
         {error ? (
-          <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 text-sm font-semibold text-rose-700">
+          <div className="notice mt-5">
             {error}
           </div>
         ) : null}
 
-        <section className="mt-5 grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-          <aside className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+        <section className="mt-7 grid gap-5 lg:grid-cols-[280px_minmax(0,1fr)]">
+          <aside className="data-surface p-4">
             <div className="flex items-center justify-between gap-3">
-              <h2 className="text-sm font-semibold text-slate-950">Runs recentes</h2>
+              <h2 className="text-sm font-extrabold text-[color:var(--platinum)]">Runs recentes</h2>
               <button
-                className="rounded-lg border border-slate-200 px-3 py-1 text-xs font-semibold text-slate-700 transition hover:border-slate-400 disabled:opacity-40"
+                className="secondary-button min-h-8 px-3 text-xs disabled:opacity-40"
                 disabled={busy}
                 type="button"
                 onClick={() => void refreshRuns()}
               >
+                <RefreshCw aria-hidden className="mr-2 h-4 w-4" />
                 Atualizar
               </button>
             </div>
@@ -193,22 +198,22 @@ export function BenchmarkDashboard({ onBack }: { onBack: () => void }) {
               {runs.map((run) => (
                 <button
                   className={classNames(
-                    "w-full rounded-lg border p-3 text-left transition",
+                    "w-full rounded-lg p-3 text-left transition",
                     selectedRun?.id === run.id
-                      ? "border-slate-900 bg-slate-950 text-white"
-                      : "border-slate-200 bg-white text-slate-800 hover:border-slate-400",
+                      ? "bg-[color:var(--grape-soda)] text-white"
+                      : "bg-[rgba(239,239,239,0.06)] text-[color:var(--platinum)] hover:bg-[rgba(239,239,239,0.1)]",
                   )}
                   key={run.id}
                   type="button"
                   onClick={() => void loadRun(run.id)}
                 >
                   <span className="block text-sm font-semibold">{formatDate(run.started_at)}</span>
-                  <span className={classNames("mt-1 block text-xs", selectedRun?.id === run.id ? "text-slate-300" : "text-slate-500")}>
+                  <span className={classNames("mt-1 block text-xs", selectedRun?.id === run.id ? "text-[rgba(239,239,239,0.7)]" : "text-[color:var(--muted)]")}>
                     {statusLabel(run.status)} | {run.result_count}/{run.expected_results}
                   </span>
                 </button>
               ))}
-              {runs.length === 0 ? <p className="rounded-lg bg-slate-50 p-3 text-sm text-slate-500">Sem benchmarks.</p> : null}
+              {runs.length === 0 ? <p className="rounded-lg bg-[rgba(239,239,239,0.06)] p-3 text-sm font-semibold text-[color:var(--muted)]">Sem benchmarks.</p> : null}
             </div>
           </aside>
 
@@ -222,18 +227,21 @@ export function BenchmarkDashboard({ onBack }: { onBack: () => void }) {
 
             {selectedRun ? (
               <>
-                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="data-surface p-5">
                   <div className="flex flex-wrap items-center justify-between gap-3">
                     <div>
-                      <h2 className="text-lg font-semibold text-slate-950">Run {selectedRun.id.slice(0, 8)}</h2>
-                      <p className="mt-1 text-sm text-slate-500">
+                      <h2 className="flex items-center gap-2 text-lg font-extrabold text-[color:var(--platinum)]">
+                        <Gauge aria-hidden className="h-5 w-5 text-[color:var(--dark-goldenrod)]" />
+                        Run {selectedRun.id.slice(0, 8)}
+                      </h2>
+                      <p className="mt-1 text-sm font-semibold text-[color:var(--muted)]">
                         {selectedRun.device_id} | {selectedRun.iterations} iterações | {selectedRun.last_status ?? "aguardando"}
                       </p>
                     </div>
-                    {selectedRun.error ? <span className="text-sm font-semibold text-rose-600">{selectedRun.error}</span> : null}
+                    {selectedRun.error ? <span className="text-sm font-semibold text-[color:var(--grape-soda)]">{selectedRun.error}</span> : null}
                   </div>
-                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-slate-100">
-                    <div className="h-full bg-slate-950 transition-all" style={{ width: `${completion}%` }} />
+                  <div className="mt-4 h-2 overflow-hidden rounded-full bg-[rgba(239,239,239,0.08)]">
+                    <div className="h-full bg-[color:var(--dark-goldenrod)] transition-all" style={{ width: `${completion}%` }} />
                   </div>
                 </div>
 
@@ -242,7 +250,7 @@ export function BenchmarkDashboard({ onBack }: { onBack: () => void }) {
                 <BenchmarkTable run={selectedRun} />
               </>
             ) : (
-              <div className="rounded-lg border border-slate-200 bg-white p-8 text-center text-sm text-slate-500 shadow-sm">
+              <div className="data-surface p-8 text-center text-sm font-semibold text-[color:var(--muted)]">
                 Inicie um benchmark para preencher a dashboard.
               </div>
             )}
@@ -255,9 +263,9 @@ export function BenchmarkDashboard({ onBack }: { onBack: () => void }) {
 
 function InfoCard({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <p className="text-xs font-semibold uppercase text-slate-500">{label}</p>
-      <p className="mt-2 truncate text-xl font-semibold tabular-nums text-slate-950">{value}</p>
+    <div className="metric-card">
+      <p className="metric-label">{label}</p>
+      <p className="metric-value truncate tabular-nums">{value}</p>
     </div>
   );
 }
@@ -277,15 +285,18 @@ function LatencyChart({ metric, run, title }: { metric: MetricKey; run: Benchmar
   const groupWidth = innerWidth / Math.max(1, run.sample_counts.length);
   const barWidth = Math.min(34, groupWidth / 3);
   const colors: Record<BenchmarkStrategy, string> = {
-    inefficient_shift_buffer: "#dc2626",
-    ring_buffer: "#2563eb",
+    inefficient_shift_buffer: "rgba(143, 57, 133, 1)",
+    ring_buffer: "rgba(182, 143, 64, 1)",
   };
 
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+    <div className="data-surface p-5">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <h2 className="text-lg font-semibold text-slate-950">{title}</h2>
-        <div className="flex flex-wrap gap-3 text-xs font-semibold text-slate-600">
+        <h2 className="flex items-center gap-2 text-lg font-extrabold text-[color:var(--platinum)]">
+          <BarChart3 aria-hidden className="h-5 w-5 text-[color:var(--dark-goldenrod)]" />
+          {title}
+        </h2>
+        <div className="flex flex-wrap gap-3 text-xs font-extrabold text-[color:var(--muted)]">
           {run.strategies.map((strategy) => (
             <span className="inline-flex items-center gap-2" key={strategy}>
               <span className="h-2.5 w-2.5 rounded-sm" style={{ backgroundColor: colors[strategy] }} />
@@ -295,14 +306,14 @@ function LatencyChart({ metric, run, title }: { metric: MetricKey; run: Benchmar
         </div>
       </div>
       <svg className="mt-4 h-auto w-full" role="img" viewBox={`0 0 ${width} ${height}`}>
-        <line stroke="#cbd5e1" x1={left} x2={width - 12} y1={height - bottom} y2={height - bottom} />
-        <line stroke="#cbd5e1" x1={left} x2={left} y1={top} y2={height - bottom} />
+        <line stroke="rgba(239, 239, 239, 0.18)" x1={left} x2={width - 12} y1={height - bottom} y2={height - bottom} />
+        <line stroke="rgba(239, 239, 239, 0.18)" x1={left} x2={left} y1={top} y2={height - bottom} />
         {[0, 0.5, 1].map((ratio) => {
           const y = top + innerHeight - ratio * innerHeight;
           return (
             <g key={ratio}>
-              <line stroke="#e2e8f0" x1={left} x2={width - 12} y1={y} y2={y} />
-              <text fill="#64748b" fontSize="12" textAnchor="end" x={left - 8} y={y + 4}>
+              <line stroke="rgba(239, 239, 239, 0.08)" x1={left} x2={width - 12} y1={y} y2={y} />
+              <text fill="rgba(239, 239, 239, 0.58)" fontSize="12" textAnchor="end" x={left - 8} y={y + 4}>
                 {Math.round(maxValue * ratio)}
               </text>
             </g>
@@ -330,7 +341,7 @@ function LatencyChart({ metric, run, title }: { metric: MetricKey; run: Benchmar
                   />
                 );
               })}
-              <text fill="#475569" fontSize="12" fontWeight="600" textAnchor="middle" x={groupX} y={height - 16}>
+              <text fill="rgba(239, 239, 239, 0.7)" fontSize="12" fontWeight="700" textAnchor="middle" x={groupX} y={height - 16}>
                 N={sampleCount}
               </text>
             </g>
@@ -350,13 +361,16 @@ function BenchmarkTable({ run }: { run: BenchmarkRunRead }) {
   });
 
   return (
-    <div className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
-      <div className="border-b border-slate-100 p-4">
-        <h2 className="text-lg font-semibold text-slate-950">Heap, duração e drops</h2>
+    <div className="data-surface">
+      <div className="border-b border-[color:var(--line)] p-5">
+        <h2 className="flex items-center gap-2 text-lg font-extrabold text-[color:var(--platinum)]">
+          <Table2 aria-hidden className="h-5 w-5 text-[color:var(--dark-goldenrod)]" />
+          Heap, duração e drops
+        </h2>
       </div>
       <div className="overflow-x-auto">
         <table className="min-w-full text-left text-sm">
-          <thead className="bg-slate-50 text-xs font-semibold uppercase text-slate-500">
+          <thead className="bg-[rgba(239,239,239,0.06)] text-xs font-extrabold uppercase text-[color:var(--muted)]">
             <tr>
               <th className="px-4 py-3">Estrategia</th>
               <th className="px-4 py-3">N</th>
@@ -368,10 +382,10 @@ function BenchmarkTable({ run }: { run: BenchmarkRunRead }) {
               <th className="px-4 py-3">Drops</th>
             </tr>
           </thead>
-          <tbody className="divide-y divide-slate-100">
+          <tbody className="divide-y divide-[rgba(239,239,239,0.08)] text-[color:var(--platinum)]">
             {sortedResults.map((result) => (
               <tr key={result.id}>
-                <td className="px-4 py-3 font-semibold text-slate-900">{strategyLabel(result.strategy)}</td>
+                <td className="px-4 py-3 font-extrabold">{strategyLabel(result.strategy)}</td>
                 <td className="px-4 py-3 tabular-nums">{result.sample_count}</td>
                 <td className="px-4 py-3 tabular-nums">{result.latency_us_avg.toFixed(2)}</td>
                 <td className="px-4 py-3 tabular-nums">{result.latency_us_max}</td>
@@ -383,7 +397,7 @@ function BenchmarkTable({ run }: { run: BenchmarkRunRead }) {
             ))}
             {sortedResults.length === 0 ? (
               <tr>
-                <td className="px-4 py-6 text-center text-slate-500" colSpan={8}>
+                <td className="px-4 py-6 text-center font-semibold text-[color:var(--muted)]" colSpan={8}>
                   Aguardando resultados da ESP32.
                 </td>
               </tr>
