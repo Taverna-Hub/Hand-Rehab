@@ -6,7 +6,6 @@ from pathlib import Path
 import matplotlib
 import pandas as pd
 
-
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
@@ -88,7 +87,9 @@ def save_current_figure(name: str) -> None:
     plt.close()
 
 
-def plot_metric_by_n(data: pd.DataFrame, metric: str, ylabel: str, title: str, output_name: str) -> None:
+def plot_metric_by_n(
+    data: pd.DataFrame, metric: str, ylabel: str, title: str, output_name: str
+) -> None:
     grouped = grouped_by_n(data, metric)
     scenarios = list(SCENARIO_LABELS)
     fig, axes = plt.subplots(1, len(scenarios), figsize=(13.5, 4.8), sharey=True)
@@ -113,7 +114,14 @@ def plot_metric_by_n(data: pd.DataFrame, metric: str, ylabel: str, title: str, o
     axes[0].set_ylabel(ylabel)
     handles, labels = axes[0].get_legend_handles_labels()
     fig.suptitle(title, y=0.98, fontsize=14, fontweight="bold")
-    fig.legend(handles, labels, loc="upper center", bbox_to_anchor=(0.5, 0.91), ncol=2, frameon=False)
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        bbox_to_anchor=(0.5, 0.91),
+        ncol=2,
+        frameon=False,
+    )
     fig.subplots_adjust(top=0.76, bottom=0.14, wspace=0.24)
     save_current_figure(output_name)
 
@@ -130,7 +138,9 @@ def plot_drops(data: pd.DataFrame) -> None:
 
 def plot_ratio(data: pd.DataFrame) -> pd.DataFrame:
     grouped = grouped_by_n(data, "latency_us_avg")
-    pivot = grouped.pivot_table(index=["scenario", "sample_count"], columns="strategy", values="latency_us_avg")
+    pivot = grouped.pivot_table(
+        index=["scenario", "sample_count"], columns="strategy", values="latency_us_avg"
+    )
     pivot["ratio"] = pivot["inefficient_shift_buffer"] / pivot["ring_buffer"]
     ratio = pivot.reset_index()[["scenario", "sample_count", "ratio"]]
 
@@ -141,13 +151,18 @@ def plot_ratio(data: pd.DataFrame) -> pd.DataFrame:
     x_base = range(len(sample_counts))
     for index, scenario in enumerate(scenarios):
         values = [
-            ratio[(ratio["scenario"] == scenario) & (ratio["sample_count"] == sample_count)]["ratio"].iloc[0]
+            ratio[
+                (ratio["scenario"] == scenario)
+                & (ratio["sample_count"] == sample_count)
+            ]["ratio"].iloc[0]
             for sample_count in sample_counts
         ]
         x_values = [x + (index - 1) * width for x in x_base]
         axis.bar(x_values, values, width=width, label=SCENARIO_LABELS[scenario])
     axis.set_xticks(list(x_base))
-    axis.set_xticklabels([f"N={sample_count:,}".replace(",", ".") for sample_count in sample_counts])
+    axis.set_xticklabels(
+        [f"N={sample_count:,}".replace(",", ".") for sample_count in sample_counts]
+    )
     axis.set_ylabel("Razao ineficiente / ring buffer")
     axis.set_title("Crescimento relativo da estrategia O(n)", fontweight="bold", pad=14)
     axis.grid(axis="y", alpha=0.25)
@@ -157,7 +172,9 @@ def plot_ratio(data: pd.DataFrame) -> pd.DataFrame:
     return ratio.round(3)
 
 
-def write_manifest(data: pd.DataFrame, summary: pd.DataFrame, ratio: pd.DataFrame) -> None:
+def write_manifest(
+    data: pd.DataFrame, summary: pd.DataFrame, ratio: pd.DataFrame
+) -> None:
     manifest = {
         "source": "mqtt_flow_emulated_no_esp32",
         "source_csv": str(SOURCE_CSV.relative_to(ROOT)).replace("\\", "/"),
@@ -171,7 +188,9 @@ def write_manifest(data: pd.DataFrame, summary: pd.DataFrame, ratio: pd.DataFram
         "ratio_by_scenario_and_n": ratio.to_dict(orient="records"),
         "note": "Algorithm timings are emulated; MQTT publication, Node-RED routing, backend ingestion and persistence were exercised.",
     }
-    MANIFEST_JSON.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    MANIFEST_JSON.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
 
 
 def main() -> None:
@@ -180,10 +199,34 @@ def main() -> None:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     summary.to_csv(SUMMARY_CSV, index=False)
 
-    plot_metric_by_n(data, "latency_us_avg", "Latencia media (us)", "Latencia media emulada por escala de N", "aa-latency-avg-by-n")
-    plot_metric_by_n(data, "latency_us_max", "Latencia maxima media (us)", "Picos de latencia emulados por escala de N", "aa-latency-max-by-n")
-    plot_metric_by_n(data, "min_free_heap_bytes", "Heap minimo medio (bytes)", "Heap minimo emulado por escala de N", "aa-min-heap-by-n")
-    plot_metric_by_n(data, "mqtt_publish_latency_us", "Latencia de publish MQTT (us)", "Publish MQTT local medido pelo emulador", "aa-mqtt-latency-by-n")
+    plot_metric_by_n(
+        data,
+        "latency_us_avg",
+        "Latencia media (us)",
+        "Latencia media emulada por escala de N",
+        "aa-latency-avg-by-n",
+    )
+    plot_metric_by_n(
+        data,
+        "latency_us_max",
+        "Latencia maxima media (us)",
+        "Picos de latencia emulados por escala de N",
+        "aa-latency-max-by-n",
+    )
+    plot_metric_by_n(
+        data,
+        "min_free_heap_bytes",
+        "Heap minimo medio (bytes)",
+        "Heap minimo emulado por escala de N",
+        "aa-min-heap-by-n",
+    )
+    plot_metric_by_n(
+        data,
+        "mqtt_publish_latency_us",
+        "Latencia de publish MQTT (us)",
+        "Publish MQTT local medido pelo emulador",
+        "aa-mqtt-latency-by-n",
+    )
     plot_drops(data)
     ratio = plot_ratio(data)
     write_manifest(data, summary, ratio)

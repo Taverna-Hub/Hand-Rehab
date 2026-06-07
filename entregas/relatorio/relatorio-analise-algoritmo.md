@@ -3,7 +3,7 @@
 **Projeto:** Otimização de Telemetria com Buffer Circular
 **Disciplina:** Análise de Algoritmos e Sistemas Embarcados
 **Sistema analisado:** Hand Rehab MVP
-**Data da campanha:** 2026-06-03
+**Data da campanha:** 2026-06-04
 
 ## 1. Objetivo
 
@@ -11,7 +11,7 @@ Este relatório apresenta o perfilamento de duas estratégias para captura, arma
 
 O objetivo da análise é comparar uma abordagem baseada em deslocamento linear de elementos, denominada neste relatório como Vertente 1, com uma abordagem baseada em buffer circular de tamanho fixo, denominada Vertente 2. A comparação considera a complexidade assintótica das operações, o comportamento das estratégias sob diferentes escalas de `N`, o impacto sobre o uso de memória e a resposta do sistema em cenários com gargalo ou instabilidade de rede.
 
-Como a placa ESP32 física não estava disponível durante a análise final, os tempos de execução dos algoritmos foram obtidos por meio de uma emulação determinística. Entretanto, o fluxo de telemetria foi validado de ponta a ponta com os componentes reais do MVP: publicação em broker MQTT, roteamento pelo Node-RED, recebimento pelo backend e persistência em banco PostgreSQL. Dessa forma, os resultados de latência algorítmica devem ser interpretados como resultados emulados, enquanto o fluxo de comunicação e persistência foi exercitado em ambiente real do projeto.
+Nesta revisão, os resultados usados no relatório foram obtidos a partir de uma execução persistida no PostgreSQL do MVP, nas tabelas `benchmark_runs` e `benchmark_results`. Assim, os dados analisados correspondem ao fluxo de benchmark publicado no tópico MQTT da ESP32, recebido pelo backend e registrado no banco de dados, permitindo conferência direta a partir do identificador da execução.
 
 ## 2. Contextualização do Problema
 
@@ -80,40 +80,38 @@ Além da instrumentação prevista no firmware, o MVP possui um fluxo completo p
 * envio dos dados ao backend;
 * persistência dos resultados no PostgreSQL.
 
-Para a campanha final, sem a placa ESP32 física, foram utilizados scripts de apoio para reproduzir deterministicamente o comportamento esperado dos algoritmos e publicar os resultados no fluxo real de telemetria:
+Para esta revisão do relatório, foi usada uma execução real já persistida no banco de dados. A consulta foi feita no PostgreSQL, banco `postgres`, nas tabelas `benchmark_runs` e `benchmark_results`.
 
 ```text
-entregas/perfilamento/benchmark_model.py
-entregas/perfilamento/esp32_flow_emulator.py
-entregas/perfilamento/build_emulated_report_assets.py
+benchmark_runs.id = 762ba7a6-41a5-42ee-99fa-b5a1c23023f6
 ```
 
-A campanha foi executada com os seguintes parâmetros:
+A execução escolhida possui os seguintes metadados:
 
-* cenários avaliados: `baseline`, `network_jitter` e `stress`;
+* dispositivo: `esp32-001`;
+* status: `completed`;
 * escalas de amostras: `N=100`, `N=5000` e `N=20000`;
 * estratégias avaliadas: `ring_buffer` e `inefficient_shift_buffer`;
-* repetições por cenário: 5;
-* total de resultados publicados: 90;
-* execuções persistidas no backend: 15;
-* resultados por execução: 6.
+* operação avaliada: `sliding_insert`;
+* iterações por resultado: 100;
+* resultados esperados: 6;
+* resultados persistidos: 6;
+* início da execução: `2026-06-04 15:22:50.78604+00`;
+* fim da execução: `2026-06-04 15:22:51.087392+00`;
+* tópico de resultados: `rehab/devices/esp32-001/benchmark/results`.
 
-A evidência da execução está documentada em:
-
-```text
-entregas/evidencias/mqtt-flow-emulated-benchmark.md
-```
-
-Os dados finais da campanha foram registrados nos arquivos:
+O comando usado para conferir a execução no banco foi:
 
 ```text
-entregas/perfilamento/raw/mqtt_flow_emulated_benchmark_results.csv
-entregas/perfilamento/raw/mqtt_flow_emulated_benchmark_summary.csv
+select *
+from benchmark_results
+where run_id = '762ba7a6-41a5-42ee-99fa-b5a1c23023f6'
+order by strategy, sample_count;
 ```
 
 ## 5. Análise Assintótica
 
-A análise assintótica permite comparar o comportamento das duas estratégias independentemente dos valores absolutos de tempo medidos ou emulados. O foco está no crescimento do custo computacional conforme o número de amostras `N` aumenta.
+A análise assintótica permite comparar o comportamento das duas estratégias independentemente dos valores absolutos de tempo medidos. O foco está no crescimento do custo computacional conforme o número de amostras `N` aumenta.
 
 ### 5.1 Inserção
 
@@ -164,46 +162,34 @@ A análise teórica indica que, para valores pequenos de `N`, a diferença entre
 
 ## 6. Resultados de Escalabilidade
 
-A campanha emulada avaliou o comportamento das duas estratégias sob três escalas de amostras: `N=100`, `N=5000` e `N=20000`. Essas escalas permitem observar a diferença entre uma carga pequena, uma carga intermediária e uma carga elevada de dados.
+A execução `762ba7a6-41a5-42ee-99fa-b5a1c23023f6` avaliou o comportamento das duas estratégias sob três escalas de amostras: `N=100`, `N=5000` e `N=20000`. Essas escalas permitem observar a diferença entre uma carga pequena, uma carga intermediária e uma carga elevada de dados.
 
-O resumo agregado da campanha é apresentado a seguir:
+Os resultados persistidos em `benchmark_results` são apresentados a seguir:
 
-| Cenário        | Estratégia               | Latência média (µs) | Desvio padrão (µs) | Latência máxima média (µs) | Drops médios | Heap mínimo médio (bytes) | Publicação MQTT média (µs) |
-| -------------- | ------------------------ | ------------------: | -----------------: | -------------------------: | -----------: | ------------------------: | -------------------------: |
-| baseline       | ring_buffer              |              10.709 |              0.902 |                     18.200 |        0.600 |                185374.467 |                     88.800 |
-| baseline       | inefficient_shift_buffer |              46.821 |             38.268 |                     96.000 |        1.533 |                184537.667 |                    100.000 |
-| network_jitter | ring_buffer              |              12.707 |              1.242 |                     20.733 |        1.333 |                185234.733 |                     76.800 |
-| network_jitter | inefficient_shift_buffer |              55.136 |             45.284 |                    110.800 |        2.867 |                184330.667 |                    101.333 |
-| stress         | ring_buffer              |              14.866 |              0.907 |                     24.267 |        2.200 |                185076.067 |                     95.867 |
-| stress         | inefficient_shift_buffer |              66.991 |             54.310 |                    136.733 |        3.667 |                184233.467 |                     99.800 |
+| Estratégia               | N     | Iterações | Duração total (µs) | Latência média (µs) | Latência máxima (µs) | Heap antes (bytes) | Heap depois (bytes) | Heap mínimo (bytes) | Drops |
+| ------------------------ | ----: | --------: | -----------------: | ------------------: | -------------------: | -----------------: | ------------------: | ------------------: | ----: |
+| ring_buffer              |   100 |       100 |                 72 |                   0 |                    1 |             200992 |              200468 |               86820 |     0 |
+| ring_buffer              |  5000 |       100 |                 75 |                   0 |                    1 |             198336 |              178320 |               86820 |     0 |
+| ring_buffer              | 20000 |       100 |                 85 |                   0 |                   10 |             198336 |              118320 |               86820 |     0 |
+| inefficient_shift_buffer |   100 |       100 |                400 |                   4 |                    4 |             198336 |              197920 |               86820 |     0 |
+| inefficient_shift_buffer |  5000 |       100 |              16862 |                 168 |                  195 |             198492 |              179904 |               86820 |     0 |
+| inefficient_shift_buffer | 20000 |       100 |              67397 |                 673 |                  700 |             196492 |              121488 |               86820 |     0 |
 
-![Latência média por N](../graficos/aa-latency-avg-by-n.png)
+A razão entre a duração total da Vertente 1 e da Vertente 2 evidencia a diferença de comportamento conforme o volume de amostras cresce:
 
-**Figura 1.** Latência média emulada por escala de `N`.
+| N     | Duração Vertente 2 (µs) | Duração Vertente 1 (µs) | Razão Vertente 1 / Vertente 2 |
+| ----: | ----------------------: | ----------------------: | ----------------------------: |
+|   100 |                      72 |                     400 |                         5.56x |
+|  5000 |                      75 |                   16862 |                       224.83x |
+| 20000 |                      85 |                   67397 |                       792.91x |
 
-![Latência máxima por N](../graficos/aa-latency-max-by-n.png)
-
-**Figura 2.** Latência máxima média por escala de `N`.
-
-A razão entre a latência média da Vertente 1 e da Vertente 2 evidencia a diferença de comportamento conforme o volume de amostras cresce:
-
-| Cenário        | N=100 | N=5000 | N=20000 |
-| -------------- | ----: | -----: | ------: |
-| baseline       | 1.10x |  2.93x |   8.47x |
-| network_jitter | 1.11x |  2.92x |   8.24x |
-| stress         | 1.21x |  2.93x |   8.99x |
-
-![Razão entre estratégia ineficiente e buffer circular](../graficos/aa-inefficient-vs-ring-ratio-bars.svg)
-
-**Figura 3.** Razão entre a latência média da Vertente 1 e da Vertente 2.
-
-Os resultados acompanham o comportamento previsto pela análise assintótica. Em `N=100`, a diferença entre as estratégias é pequena. Em `N=5000`, a Vertente 1 passa a apresentar latência quase três vezes maior que a Vertente 2. Em `N=20000`, o custo linear da estratégia por deslocamento se torna dominante, chegando a uma latência entre `8.24x` e `8.99x` maior que a do buffer circular.
+Os resultados acompanham o comportamento previsto pela análise assintótica. Em `N=100`, a Vertente 1 já apresentou duração total maior que a Vertente 2. Em `N=5000`, o custo de deslocamento passou a dominar o tempo de execução. Em `N=20000`, a estratégia por deslocamento registrou `67397 µs`, enquanto o buffer circular registrou `85 µs`.
 
 Esse comportamento reforça que a diferença entre as estratégias não está apenas nos tempos absolutos, mas principalmente na forma como cada uma escala. A Vertente 1 degrada conforme o volume de dados aumenta, enquanto a Vertente 2 mantém maior estabilidade.
 
 ## 7. Diagnóstico de Memória
 
-A análise de memória considerou o comportamento esperado das duas abordagens e os indicadores emulados de heap livre registrados durante a campanha. Como a execução final não ocorreu em uma placa ESP32 física, os valores apresentados nesta seção devem ser interpretados como indicadores emulados de pressão de memória, e não como medição direta de fragmentação real do heap.
+A análise de memória considerou o comportamento esperado das duas abordagens e os indicadores de heap livre persistidos na execução `762ba7a6-41a5-42ee-99fa-b5a1c23023f6`.
 
 Na Vertente 1, o principal risco está associado à movimentação linear de memória e, em implementações alternativas, ao uso frequente de realocação dinâmica. Estratégias baseadas em `realloc()` podem provocar alocações e liberações sucessivas no heap, aumentando a fragmentação ao longo da execução. Em sistemas embarcados, esse comportamento é especialmente problemático, pois a memória disponível é limitada e a previsibilidade do sistema é parte essencial da confiabilidade.
 
@@ -211,19 +197,9 @@ Na implementação comparativa utilizada nesta campanha, a Vertente 1 não provo
 
 A Vertente 2, por sua vez, utiliza uma área fixa de memória durante a execução. Como os índices `head` e `tail` controlam logicamente as posições de escrita e leitura, não é necessário deslocar elementos nem realocar a estrutura para manter a janela de amostras. Essa característica torna o consumo de memória mais previsível e reduz o risco de instabilidade associado à gestão dinâmica do heap.
 
-![Heap mínimo por N](../graficos/aa-min-heap-by-n.png)
+Na execução analisada, os dois conjuntos de resultados registraram `86820 bytes` como heap mínimo. A diferença aparece principalmente no heap antes e depois de cada teste, especialmente em `N=20000`: o buffer circular terminou com `118320 bytes` livres, enquanto a abordagem por deslocamento terminou com `121488 bytes`. Esses valores não indicam, isoladamente, fragmentação real do heap, mas documentam a pressão de memória observada durante a execução persistida.
 
-**Figura 4.** Heap mínimo médio emulado por escala de `N`.
-
-Na campanha emulada, a Vertente 2 apresentou maior heap mínimo médio em todos os cenários avaliados:
-
-| Cenário        | Heap mínimo médio Vertente 2 | Heap mínimo médio Vertente 1 | Diferença aproximada |
-| -------------- | ---------------------------: | ---------------------------: | -------------------: |
-| baseline       |                 185374 bytes |                 184538 bytes |            837 bytes |
-| network_jitter |                 185235 bytes |                 184331 bytes |            904 bytes |
-| stress         |                 185076 bytes |                 184233 bytes |            843 bytes |
-
-Esses resultados indicam menor pressão de memória na Vertente 2 dentro do modelo emulado. A diferença observada está alinhada ao comportamento esperado de uma estrutura com memória fixa e operações constantes. No entanto, a fragmentação real do heap deve ser validada em uma etapa futura com a placa ESP32 física, utilizando medições diretas com `ESP.getFreeHeap()` e, se necessário, testes específicos com alocação e realocação dinâmica.
+Mesmo com heap mínimo igual na execução selecionada, o ponto central da análise permanece: a Vertente 2 mantém a estrutura em região fixa e evita movimentação linear dos elementos. A Vertente 1, embora use vetor fixo nesta implementação comparativa, concentra custo computacional na manutenção da janela e se torna menos previsível conforme `N` aumenta.
 
 Portanto, a análise de memória aponta que o buffer circular é a estratégia mais adequada para o MVP por oferecer uso previsível de memória, menor dependência de movimentações internas e menor exposição a problemas associados à fragmentação do heap.
 
@@ -255,41 +231,33 @@ rede lenta -> maior ocupação do buffer -> maior custo de deslocamento -> maior
 
 Na Vertente 2, o buffer circular reduz esse problema. Como a inserção e a remoção são `O(1)`, o custo das operações não cresce proporcionalmente ao número de amostras armazenadas. Isso torna a estrutura mais adequada para o modelo produtor-consumidor, no qual a captura local produz dados continuamente e a publicação MQTT consome esses dados conforme a rede permite.
 
-![Latência MQTT por N](../graficos/aa-mqtt-latency-by-n.png)
-
-**Figura 5.** Latência local de publicação MQTT medida pelo emulador.
-
-![Drops por N](../graficos/aa-drops-by-n.png)
-
-**Figura 6.** Perdas de amostras emuladas por escala de `N`.
-
-Os cenários `network_jitter` e `stress` foram utilizados para representar condições de maior instabilidade. Mesmo nesses cenários, a Vertente 2 manteve menor latência média, menor latência máxima e menor número médio de perdas de amostras em relação à Vertente 1.
+Na execução analisada, todos os seis resultados foram recebidos pelo backend pelo tópico `rehab/devices/esp32-001/benchmark/results` e persistidos sem perdas de amostras (`dropped_samples = 0`). Isso indica que, para essa run, o fluxo MQTT e a persistência no PostgreSQL conseguiram absorver os lotes de benchmark sem descarte.
 
 Esse resultado reforça que o buffer circular não apenas reduz o custo computacional das operações, mas também melhora a capacidade do sistema de absorver variações de rede sem comprometer diretamente a rotina de captura.
 
 ## 9. Limitações
 
-A campanha apresentada possui limitações importantes. A principal delas é a ausência da placa ESP32 física durante a execução final dos testes. Por esse motivo, os tempos de execução dos algoritmos foram obtidos por emulação determinística, e os valores de heap livre também foram simulados.
+A campanha apresentada possui limitações importantes. O relatório utiliza uma run real persistida no banco, mas a análise está baseada em uma única execução completa. Portanto, os resultados devem ser interpretados como evidência de uma execução verificável, não como média estatística de uma campanha ampla.
 
 As principais limitações da análise são:
 
-* `micros()` não foi medido diretamente na ESP32 durante a campanha final;
-* `ESP.getFreeHeap()` não foi coletado fisicamente na placa;
+* apenas uma run completa foi usada no relatório;
+* os resultados não foram agregados por múltiplas repetições;
 * a fragmentação real do heap por uso de `realloc()` não foi provocada em hardware;
-* os tempos de execução dos algoritmos foram obtidos por modelo determinístico;
-* a latência MQTT registrada representa o ambiente local do emulador e dos containers do MVP.
+* a execução não isola a latência de rede do custo algorítmico local;
+* a tabela `benchmark_results` registra os resultados finais por estratégia e escala, não uma série temporal completa de cada iteração.
 
-Apesar dessas limitações, a campanha validou aspectos importantes da solução. O fluxo MQTT foi exercitado de ponta a ponta, os contratos dos payloads foram testados, os dados foram processados pelo Node-RED, recebidos pelo backend e persistidos no PostgreSQL. Além disso, os resultados emulados foram coerentes com a análise assintótica esperada para as duas estruturas.
+Apesar dessas limitações, a run escolhida valida aspectos importantes da solução. O fluxo MQTT foi exercitado de ponta a ponta, os contratos dos payloads foram testados, os dados foram recebidos pelo backend e persistidos no PostgreSQL. Além disso, os resultados registrados foram coerentes com a análise assintótica esperada para as duas estruturas.
 
-Uma etapa futura recomendada é repetir a campanha com a ESP32 física, sensores reais e conexão Wi-Fi do ambiente de teste. Essa etapa permitiria coletar medições reais de latência com `micros()`, memória livre com `ESP.getFreeHeap()` e eventuais efeitos de fragmentação em cenários com alocação dinâmica.
+Uma etapa futura recomendada é repetir a campanha com várias runs completas, sensores reais e conexão Wi-Fi do ambiente de teste. Essa etapa permitiria calcular médias, desvio padrão, intervalos de confiança e eventuais efeitos de fragmentação em cenários com alocação dinâmica.
 
 ## 10. Conclusão
 
 A análise realizada demonstra que o buffer circular é a estratégia mais adequada para a telemetria do MVP Hand Rehab. Do ponto de vista assintótico, a Vertente 2 mantém inserção e remoção em tempo constante, `O(1)`, enquanto a Vertente 1 apresenta custo linear, `O(N)`, na remoção do primeiro elemento e na manutenção da janela de amostras.
 
-Os resultados da campanha emulada acompanham essa diferença teórica. Para `N=100`, a diferença entre as estratégias foi pequena. Para `N=5000`, a abordagem por deslocamento já apresentou degradação relevante. Para `N=20000`, o custo linear tornou a Vertente 1 significativamente mais lenta, chegando a quase nove vezes a latência média da Vertente 2 em alguns cenários.
+Os resultados da run `762ba7a6-41a5-42ee-99fa-b5a1c23023f6` acompanham essa diferença teórica. Para `N=100`, a abordagem por deslocamento registrou `400 µs` de duração total contra `72 µs` do buffer circular. Para `N=5000`, a diferença subiu para `16862 µs` contra `75 µs`. Para `N=20000`, o custo linear tornou a Vertente 1 significativamente mais lenta, com `67397 µs` contra `85 µs` da Vertente 2.
 
-Na análise de memória, a Vertente 2 também se mostrou mais adequada por utilizar uma região fixa de armazenamento e evitar movimentações desnecessárias de dados. Embora a fragmentação real do heap não tenha sido medida nesta campanha, o comportamento teórico das duas abordagens indica maior previsibilidade e menor risco operacional no uso do buffer circular.
+Na análise de memória, os resultados da run registraram o mesmo heap mínimo para as duas estratégias, mas a Vertente 2 continua sendo mais adequada por utilizar uma região fixa de armazenamento e evitar movimentações desnecessárias de dados. Embora a fragmentação real do heap não tenha sido isolada nesta campanha, o comportamento teórico das duas abordagens indica maior previsibilidade e menor risco operacional no uso do buffer circular.
 
 Em condições de instabilidade de rede, a Vertente 2 também apresenta vantagem. O modelo produtor-consumidor permite que a captura local continue inserindo amostras no buffer em tempo constante, enquanto a publicação MQTT consome os dados conforme a disponibilidade da rede. Isso reduz o acoplamento entre atraso de transmissão e jitter de amostragem.
 
@@ -297,24 +265,20 @@ Dessa forma, a Vertente 2 atende melhor aos requisitos de previsibilidade tempor
 
 ## 11. Reprodução
 
-Com os containers do MVP ativos, a campanha pode ser reproduzida com o seguinte comando:
+Com os containers do MVP ativos, a run usada neste relatório pode ser conferida no banco com:
 
-```powershell
-.\.venv\Scripts\python.exe entregas\perfilamento\esp32_flow_emulator.py --replicates 5
+```bash
+docker compose exec postgres psql -U rehab_user -d postgres -c "select * from benchmark_runs where id = '762ba7a6-41a5-42ee-99fa-b5a1c23023f6';"
 ```
 
-Após a execução, os resumos, gráficos e manifesto podem ser regenerados com:
+Os resultados associados podem ser conferidos com:
 
-```powershell
-.\.venv\Scripts\python.exe entregas\perfilamento\build_emulated_report_assets.py
+```bash
+docker compose exec postgres psql -U rehab_user -d postgres -c "select * from benchmark_results where run_id = '762ba7a6-41a5-42ee-99fa-b5a1c23023f6' order by strategy, sample_count;"
 ```
 
-Os principais arquivos gerados são:
+Para executar uma nova campanha a partir do firmware, o backend deve criar uma nova entrada em `benchmark_runs`, enviar o comando de benchmark por MQTT e persistir os resultados recebidos em `benchmark_results`. A run usada neste relatório deve permanecer como referência verificável:
 
 ```text
-entregas/perfilamento/raw/mqtt_flow_emulated_benchmark_results.csv
-entregas/perfilamento/raw/mqtt_flow_emulated_benchmark_summary.csv
-entregas/perfilamento/raw/mqtt_flow_emulated_benchmark_manifest.json
-entregas/graficos/aa-*.png
-entregas/graficos/aa-*.svg
+762ba7a6-41a5-42ee-99fa-b5a1c23023f6
 ```
