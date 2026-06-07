@@ -1,15 +1,13 @@
 # Graficos
 
-Use esta pasta para guardar graficos usados na avaliacao academica.
+Esta pasta contem somente os graficos usados pelo relatorio final.
 
-Exemplos:
+## Estrutura
 
-- Amostras recebidas em lote via MQTT.
-- Comparativo de latencia entre Ring Buffer e estrategia ineficiente.
-- Evolucao de heap livre durante testes.
-- Drops por carga de eventos.
-- Resultados por escala de amostras, como `N=100`, `N=5000` e `N=20000`.
+- `real/`: figuras geradas a partir da execucao real `762ba7a6-41a5-42ee-99fa-b5a1c23023f6`.
 
-Os arquivos `aa-*` sao gerados por `entregas/perfilamento/build_emulated_report_assets.py` a partir de `entregas/perfilamento/raw/mqtt_flow_emulated_benchmark_results.csv`.
+Os arquivos podem ser regenerados com:
 
-Os tempos de algoritmo continuam emulados, pois nao houve ESP32 fisica, mas a publicacao MQTT, o roteamento Node-RED e a persistencia passaram pelo fluxo real do MVP.
+```bash
+MPLCONFIGDIR=/tmp/matplotlib-cache .venv/bin/python entregas/perfilamento/build_real_report_assets.py
+```

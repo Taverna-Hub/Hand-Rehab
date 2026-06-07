@@ -794,27 +794,17 @@ Bloqueado: depende de ESP32 real, quatro botoes, HX710B conectado e credenciais 
 - [x] Nao ha implementacao desnecessaria de jogo completo.
   - Evidencia: frontend contem apenas placeholder.
 
-## Fase 17 - Entregaveis academicos de apoio
+## Fase 17 - Entrega academica final
 
-Adiado: os artefatos de perfilamento real, comparativo em microssegundos e instabilidade de rede exigem execucoes fisicas ou testes de estresse com dados reais. As evidencias do smoke test e notas tecnicas foram registradas.
+Os artefatos intermediarios foram consolidados na entrega final baseada na execucao real `762ba7a6-41a5-42ee-99fa-b5a1c23023f6`.
 
-- [x] Guardar prints, logs e comprovacoes de execucao em `entregas/evidencias/`.
-  - Evidencia: `entregas/evidencias/mvp-smoke-test.md`.
-- [x] Guardar graficos de dados recebidos em lote via MQTT em `entregas/graficos/`.
-  - Evidencia: `entregas/graficos/batch-mqtt-smoke-test.csv`.
-- [ ] Guardar comparativo de latencia em microssegundos entre estrategia ineficiente e Ring Buffer em `entregas/graficos/`.
-  - Adiado: comparativo em microssegundos exige coleta fisica ou benchmark dedicado na ESP32.
-- [ ] Guardar dados brutos de latencia, heap, drops e testes de estresse em `entregas/perfilamento/`.
-  - Adiado: dados brutos de estresse dependem de execucao fisica/estresse de rede.
-- [ ] Registrar impacto de memoria/heap de cada estrategia em `entregas/perfilamento/`.
-  - Adiado: impacto real de heap por estrategia depende de coleta na ESP32.
-- [ ] Registrar comportamento sob gargalo ou instabilidade de rede em `entregas/perfilamento/`.
-  - Adiado: requer cenario controlado de instabilidade de rede.
-- [x] Preparar notas para relatorio tecnico em `entregas/relatorio/` com:
-  - analise assintotica
-  - diagnostico de memoria
-  - discussao sobre produtor-consumidor e rede
-  - Evidencia: `entregas/relatorio/notas-tecnicas-mvp.md`.
+- [x] Manter o relatorio final em `entregas/relatorio/final.md`.
+  - Evidencia: relatorio com analise assintotica, resultados empiricos, diagnostico de memoria e discussao de rede.
+- [x] Manter somente os graficos usados pelo relatorio em `entregas/graficos/real/`.
+  - Evidencia: cinco figuras PNG referenciadas diretamente por `final.md`.
+- [x] Manter o script de reproducao dos graficos em `entregas/perfilamento/build_real_report_assets.py`.
+  - Evidencia: comando de reproducao documentado no relatorio e nos READMEs de `entregas/`.
+- [x] Remover rascunhos, evidencias intermediarias e artefatos de entregas anteriores de `entregas/`.
 - [x] Garantir que o README e os docs suportam avaliacao de organizacao do GitHub.
   - Evidencia: README e `docs/` documentam arquitetura, topicos, API e buffer.
 

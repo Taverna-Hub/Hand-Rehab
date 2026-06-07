@@ -1,26 +1,12 @@
 # Relatorio
 
-Use esta pasta para notas, rascunhos e material de apoio do relatorio tecnico.
+Esta pasta contem o relatorio final da entrega.
 
-Topicos esperados:
+## Arquivo principal
 
-- Analise assintotica das estrategias de buffer.
-- Diagnostico de memoria e heap.
-- Discussao sobre produtor-consumidor.
-- Discussao sobre gargalos de rede.
-- Metodologia de testes.
-- Resultados e conclusoes.
+- `final.md`: relatorio de perfilamento e analise baseado na execucao real `762ba7a6-41a5-42ee-99fa-b5a1c23023f6`.
 
-O uso desta pasta nao significa implementar relatorios finais dentro da aplicacao.
+## Artefatos associados
 
-## Relatorio principal
-
-- `relatorio-aa-perfilamento-e-analise.md`: versao final do Entregavel 3, escrita diretamente a partir dos requisitos de AA.
-
-Artefatos associados:
-
-- `../perfilamento/raw/mqtt_flow_emulated_benchmark_results.csv`
-- `../perfilamento/raw/mqtt_flow_emulated_benchmark_summary.csv`
-- `../evidencias/mqtt-flow-emulated-benchmark.md`
-- `../graficos/aa-*.png`
-- `../graficos/aa-*.svg`
+- `../graficos/real/*.png`: figuras referenciadas pelo relatorio.
+- `../perfilamento/build_real_report_assets.py`: script usado para gerar novamente os graficos.

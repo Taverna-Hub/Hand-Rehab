@@ -1,19 +1,15 @@
-# Entregas academicas
+# Entrega do relatorio final
 
-Esta pasta agrupa os artefatos de apoio para avaliacao academica e apresentacao do projeto.
-
-Ela nao substitui o codigo do MVP. Use esta pasta para guardar evidencias, graficos, dados de perfilamento e notas do relatorio tecnico.
+Esta pasta contem apenas os artefatos necessarios para a entrega do relatorio final de perfilamento e analise do MVP Hand Rehab.
 
 ## Estrutura
 
-- `evidencias/`: prints, logs e comprovacoes de execucao.
-- `graficos/`: graficos de telemetria e performance.
-- `perfilamento/`: dados brutos de latencia, heap, drops e testes de estresse.
-- `relatorio/`: notas, rascunhos e material de apoio para o relatorio tecnico.
+- `relatorio/final.md`: relatorio final.
+- `graficos/real/`: graficos usados pelo relatorio final.
+- `perfilamento/build_real_report_assets.py`: script para regenerar os graficos reais a partir dos dados da execucao de referencia.
 
-## Regras
+## Observacoes
 
-- Nao versionar senhas, IPs privados sensiveis ou dados pessoais reais.
-- Preferir arquivos pequenos e objetivos.
-- Quando possivel, nomear arquivos com data e contexto do teste.
-- Relatorios finais automatizados continuam fora do MVP; esta pasta e apenas para artefatos de avaliacao.
+- A execucao de referencia do relatorio e `762ba7a6-41a5-42ee-99fa-b5a1c23023f6`.
+- Os graficos devem permanecer sincronizados com os dados descritos em `relatorio/final.md`.
+- Nao incluir rascunhos, evidencias intermediarias ou artefatos de entregas anteriores nesta pasta.
