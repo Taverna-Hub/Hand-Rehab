@@ -1,7 +1,0 @@
-metric,value
-button_batches,1
-button_events,2
-pressure_batches,1
-pressure_readings,2
-button_mode_rejected_pressure_readings,0
-pressure_mode_rejected_button_events,0
