@@ -4,6 +4,16 @@ Sistema IoT para apoiar atividades de reabilitacao das maos com ESP32, quatro bo
 
 Este MVP entrega a base tecnica de comunicacao em tempo real, persistencia historica em batch, jogo frontend e um dashboard inicial de desempenho. Autenticacao e regras clinicas avancadas ficam fora deste ciclo.
 
+## Sumario de entregas
+
+As entregas de analise de algoritmos estao concentradas em `entregas/`:
+
+- [Visao geral das entregas](entregas/README.md)
+- [Relatorio final de perfilamento e analise](entregas/relatorio/final.md)
+- [Evidencias dos benchmarks em CSV](entregas/evidencias/README.md)
+- [Graficos usados no relatorio](entregas/graficos/README.md)
+- [Script de perfilamento e geracao dos graficos](entregas/perfilamento/README.md)
+
 ## Layout do repositorio
 
 O PRD sugere pastas como `backend/`, `frontend/`, `nodered/` e `firmware/`. Este repositorio preserva o layout inicial:
