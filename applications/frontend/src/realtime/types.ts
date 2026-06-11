@@ -13,6 +13,7 @@ export interface RealtimeBaseEvent {
   timestamp_ms: number;
   realtime_type?: RealtimeType;
   source_topic?: string;
+  node_red_received_at_ms?: number;
   sequence?: number;
   error?: string;
 }
@@ -43,6 +44,7 @@ export interface RealtimeSessionEvent {
   status?: string;
   wifi_rssi?: number;
   source_topic?: string;
+  node_red_received_at_ms?: number;
   error?: string;
 }
 

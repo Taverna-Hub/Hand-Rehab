@@ -211,6 +211,7 @@ static uint32_t lastButtonBatchPublishLatencyUs = 0;
 static uint32_t lastPressureBatchPublishLatencyUs = 0;
 static uint32_t lastMqttConnectAttemptMs = 0;
 static uint32_t buttonRawChangedAtMs[BUTTON_COUNT] = {0};
+static uint32_t buttonRawEdgeAtMs[BUTTON_COUNT] = {0};
 static bool buttonLastRawPressed[BUTTON_COUNT] = {false};
 static bool buttonStablePressed[BUTTON_COUNT] = {false};
 static bool buttonDownInSession[BUTTON_COUNT] = {false};
@@ -266,6 +267,7 @@ static void resetButtonDebounceState() {
     buttonLastRawPressed[i] = pressed;
     buttonStablePressed[i] = pressed;
     buttonRawChangedAtMs[i] = now;
+    buttonRawEdgeAtMs[i] = now;
   }
 }
 
@@ -1294,10 +1296,19 @@ static void taskMqtt(void *parameter) {
 static void taskButtons(void *parameter) {
   (void)parameter;
 
-  ButtonIsrEvent ignoredEvent = {};
+  ButtonIsrEvent isrEvent = {};
 
   for (;;) {
-    while (xQueueReceive(buttonEventQueue, &ignoredEvent, 0) == pdTRUE) {
+    while (xQueueReceive(buttonEventQueue, &isrEvent, 0) == pdTRUE) {
+      const uint8_t index = isrEvent.button_id > 0 ? static_cast<uint8_t>(isrEvent.button_id - 1) : BUTTON_COUNT;
+      if (index >= BUTTON_COUNT) {
+        continue;
+      }
+      if (isrEvent.pressed != buttonLastRawPressed[index]) {
+        buttonLastRawPressed[index] = isrEvent.pressed;
+        buttonRawChangedAtMs[index] = isrEvent.timestamp_ms;
+        buttonRawEdgeAtMs[index] = isrEvent.timestamp_ms;
+      }
     }
 
     const uint32_t now = millis();
@@ -1310,6 +1321,7 @@ static void taskButtons(void *parameter) {
       if (rawPressed != buttonLastRawPressed[index]) {
         buttonLastRawPressed[index] = rawPressed;
         buttonRawChangedAtMs[index] = now;
+        buttonRawEdgeAtMs[index] = now;
       }
 
       if (rawPressed == buttonStablePressed[index] || now - buttonRawChangedAtMs[index] < BUTTON_DEBOUNCE_MS) {
@@ -1333,7 +1345,7 @@ static void taskButtons(void *parameter) {
       ButtonSample sample = {
           static_cast<uint8_t>(index + 1),
           rawPressed ? ButtonEventType::Pressed : ButtonEventType::Released,
-          now,
+          buttonRawEdgeAtMs[index],
           ++buttonSequence,
       };
 

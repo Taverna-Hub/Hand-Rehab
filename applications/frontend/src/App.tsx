@@ -59,6 +59,8 @@ const NOTE_LEAD_MS = 2_400;
 const HIT_WINDOW_MS = 250;
 const PERFECT_WINDOW_MS = 100;
 const MISS_GRACE_MS = 90;
+const REALTIME_JITTER_GRACE_MS = 30;
+const REALTIME_CLOCK_SAMPLE_LIMIT = 20;
 const NOTE_FADE_MS = 650;
 const FEEDBACK_LIFETIME_MS = 1_250;
 const PRESSURE_HIT_KPA = 0.5;
@@ -119,6 +121,15 @@ interface LastInput {
   meta: string;
 }
 
+interface RealtimeLatencyDiagnostics {
+  inputCompensationMs: number;
+  jitterMs: number | null;
+  lastSequence: number | null;
+  offsetMs: number | null;
+  sampleCount: number;
+  transportDelayMs: number | null;
+}
+
 interface Feedback {
   id: number;
   label: string;
@@ -138,6 +149,7 @@ const LANES: Record<number, LaneDefinition> = {
 type ViteImportMeta = ImportMeta & {
   env?: {
     VITE_NODE_RED_WS_URL?: string;
+    VITE_REALTIME_INPUT_LATENCY_MS?: string;
   };
 };
 
@@ -218,6 +230,12 @@ function nodeRedRealtimeUrl() {
   return `ws://${window.location.hostname || "localhost"}:1880/ws/realtime`;
 }
 
+function realtimeInputLatencyCompensationMs() {
+  const viteEnv = (import.meta as ViteImportMeta).env;
+  const value = Number(viteEnv?.VITE_REALTIME_INPUT_LATENCY_MS ?? 120);
+  return Number.isFinite(value) ? Math.max(0, value) : 120;
+}
+
 function classNames(...values: Array<string | false | null | undefined>) {
   return values.filter(Boolean).join(" ");
 }
@@ -267,6 +285,10 @@ function isPressureEvent(event: RealtimeEvent): event is RealtimePressureEvent {
 
 function isSessionEvent(event: RealtimeEvent): event is RealtimeSessionEvent {
   return event.realtime_type === "session" || (!isButtonEvent(event) && !isPressureEvent(event));
+}
+
+function realtimeSequence(event: RealtimeEvent) {
+  return "sequence" in event && typeof event.sequence === "number" ? event.sequence : null;
 }
 
 function describeRealtimeEvent(event: RealtimeEvent): LastInput {
@@ -427,6 +449,22 @@ function formatMs(value: number | null | undefined) {
   return typeof value === "number" ? `${Math.round(value)} ms` : "--";
 }
 
+function averageRaw(values: number[]) {
+  if (values.length === 0) {
+    return null;
+  }
+  return values.reduce((total, value) => total + value, 0) / values.length;
+}
+
+function standardDeviation(values: number[]) {
+  if (values.length < 2) {
+    return 0;
+  }
+  const mean = averageRaw(values) ?? 0;
+  const variance = values.reduce((total, value) => total + (value - mean) ** 2, 0) / values.length;
+  return Math.sqrt(variance);
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) {
     return "--";
@@ -512,6 +550,14 @@ export default function App() {
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [sessionSignal, setSessionSignal] = useState("aguardando");
   const [connectionStatus, setConnectionStatus] = useState<RealtimeConnectionStatus>("connecting");
+  const [latencyDiagnostics, setLatencyDiagnostics] = useState<RealtimeLatencyDiagnostics>(() => ({
+    inputCompensationMs: realtimeInputLatencyCompensationMs(),
+    jitterMs: null,
+    lastSequence: null,
+    offsetMs: null,
+    sampleCount: 0,
+    transportDelayMs: null,
+  }));
   const [loading, setLoading] = useState(true);
   const [apiBusy, setApiBusy] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
@@ -526,6 +572,10 @@ export default function App() {
   const nextBeatIndexRef = useRef(0);
   const noteLaneCooldownsRef = useRef<LaneCooldowns>({});
   const feedbackIdRef = useRef(0);
+  const realtimeClockOffsetsRef = useRef<number[]>([]);
+  const realtimeInputCompensationMsRef = useRef(realtimeInputLatencyCompensationMs());
+  const realtimeLastSequenceRef = useRef<Record<string, number>>({});
+  const realtimeTransportDelaysRef = useRef<number[]>([]);
   const gameMusicRef = useRef<HTMLAudioElement | null>(null);
   const lossStreakSoundRef = useRef<HTMLAudioElement | null>(null);
   const mistakeSoundRef = useRef<HTMLAudioElement | null>(null);
@@ -669,6 +719,52 @@ export default function App() {
     }, FEEDBACK_LIFETIME_MS);
   }, []);
 
+  const isStaleRealtimeSequence = useCallback((event: RealtimeEvent) => {
+    const sequence = realtimeSequence(event);
+    if (sequence === null) {
+      return false;
+    }
+
+    const key = `${event.device_id}:${event.source_topic ?? event.mode}`;
+    const previousSequence = realtimeLastSequenceRef.current[key];
+    if (typeof previousSequence === "number" && sequence <= previousSequence) {
+      return true;
+    }
+
+    realtimeLastSequenceRef.current[key] = sequence;
+    return false;
+  }, []);
+
+  const getCorrectedRealtimeInputTime = useCallback((event: RealtimeEvent, receivedAt = performance.now()) => {
+    if (typeof event.timestamp_ms !== "number" || !Number.isFinite(event.timestamp_ms)) {
+      return receivedAt;
+    }
+
+    const offsets = [...realtimeClockOffsetsRef.current, receivedAt - event.timestamp_ms].slice(-REALTIME_CLOCK_SAMPLE_LIMIT);
+    realtimeClockOffsetsRef.current = offsets;
+
+    const averageOffset = averageRaw(offsets) ?? offsets[offsets.length - 1] ?? 0;
+    const jitterMs = standardDeviation(offsets);
+    const inputCompensationMs = realtimeInputCompensationMsRef.current;
+    const correctedInputTime = Math.min(receivedAt, event.timestamp_ms + averageOffset - inputCompensationMs);
+    const transportDelayMs = Math.max(0, receivedAt - correctedInputTime);
+
+    realtimeTransportDelaysRef.current = [...realtimeTransportDelaysRef.current, transportDelayMs].slice(
+      -REALTIME_CLOCK_SAMPLE_LIMIT,
+    );
+
+    setLatencyDiagnostics({
+      inputCompensationMs,
+      jitterMs,
+      lastSequence: realtimeSequence(event),
+      offsetMs: averageOffset,
+      sampleCount: offsets.length,
+      transportDelayMs: averageRaw(realtimeTransportDelaysRef.current),
+    });
+
+    return correctedInputTime;
+  }, []);
+
   const resetLocalGame = useCallback(() => {
     const now = performance.now();
     localGameStartRef.current = now;
@@ -676,6 +772,8 @@ export default function App() {
     noteLaneCooldownsRef.current = {};
     notesRef.current = [];
     pressureAboveThresholdRef.current = false;
+    realtimeClockOffsetsRef.current = [];
+    realtimeTransportDelaysRef.current = [];
     setKeyboardInputActive(false);
     setNowMs(now);
     setNotes([]);
@@ -684,6 +782,14 @@ export default function App() {
     setPressureValue(null);
     setPressureActive(false);
     setFeedbacks([]);
+    setLatencyDiagnostics((current) => ({
+      ...current,
+      jitterMs: null,
+      lastSequence: null,
+      offsetMs: null,
+      sampleCount: 0,
+      transportDelayMs: null,
+    }));
   }, []);
 
   const applyActiveSession = useCallback(
@@ -781,14 +887,14 @@ export default function App() {
   );
 
   const releaseHold = useCallback(
-    (laneId: number, inputTime = performance.now()) => {
+    (laneId: number, inputTime = performance.now(), hitWindowMs = HIT_WINDOW_MS) => {
       const holdingNote = notesRef.current.find((note) => note.status === "holding" && note.laneId === laneId);
       if (!holdingNote) {
         return;
       }
 
       const holdUntil = holdingNote.holdUntil ?? holdingNote.hitAt;
-      const completed = inputTime >= holdUntil - HIT_WINDOW_MS;
+      const completed = inputTime >= holdUntil - hitWindowMs;
       const nextNotes = notesRef.current.map((note) =>
         note.id === holdingNote.id
           ? { ...note, judgedAt: inputTime, status: completed ? "hit" as const : "miss" as const }
@@ -809,7 +915,7 @@ export default function App() {
   );
 
   const registerHit = useCallback(
-    (laneId: number, inputTime = performance.now()) => {
+    (laneId: number, inputTime = performance.now(), hitWindowMs = HIT_WINDOW_MS) => {
       if (notesRef.current.some((note) => note.status === "holding" && note.laneId === laneId)) {
         return;
       }
@@ -817,7 +923,7 @@ export default function App() {
       const candidate = notesRef.current
         .filter((note) => note.status === "pending" && note.laneId === laneId)
         .map((note) => ({ note, delta: Math.abs(note.hitAt - inputTime) }))
-        .filter(({ delta }) => delta <= HIT_WINDOW_MS)
+        .filter(({ delta }) => delta <= hitWindowMs)
         .sort((left, right) => left.delta - right.delta)[0];
 
       if (!candidate) {
@@ -856,6 +962,7 @@ export default function App() {
 
   const handleRealtimeEvent = useCallback(
     (event: RealtimeEvent) => {
+      const receivedAt = performance.now();
       recordRealtimeInput(event);
 
       if (isSessionEvent(event)) {
@@ -873,12 +980,19 @@ export default function App() {
         return;
       }
 
+      if (isStaleRealtimeSequence(event)) {
+        return;
+      }
+
+      const inputTime = getCorrectedRealtimeInputTime(event, receivedAt);
+      const realtimeHitWindowMs = HIT_WINDOW_MS + REALTIME_JITTER_GRACE_MS;
+
       if (isButtonEvent(event)) {
         setPressedLanes((current) => ({ ...current, [event.button_id]: event.event_type === "pressed" }));
         if (event.event_type === "pressed") {
-          registerHit(event.button_id);
+          registerHit(event.button_id, inputTime, realtimeHitWindowMs);
         } else {
-          releaseHold(event.button_id);
+          releaseHold(event.button_id, inputTime, realtimeHitWindowMs);
         }
         return;
       }
@@ -894,14 +1008,14 @@ export default function App() {
         const isAboveThreshold = pressureKpa >= PRESSURE_HIT_KPA;
         setPressureActive(isAboveThreshold);
         if (isAboveThreshold && !pressureAboveThresholdRef.current) {
-          registerHit(1);
+          registerHit(1, inputTime, realtimeHitWindowMs);
         } else if (!isAboveThreshold && pressureAboveThresholdRef.current) {
-          releaseHold(1);
+          releaseHold(1, inputTime, realtimeHitWindowMs);
         }
         pressureAboveThresholdRef.current = isAboveThreshold;
       }
     },
-    [recordRealtimeInput, registerHit, releaseHold],
+    [getCorrectedRealtimeInputTime, isStaleRealtimeSequence, recordRealtimeInput, registerHit, releaseHold],
   );
 
   useEffect(() => {
@@ -1231,6 +1345,7 @@ export default function App() {
         elapsedSeconds={elapsedSeconds}
         feedbacks={feedbacks}
         hand={hand}
+        latencyDiagnostics={latencyDiagnostics}
         musicMuted={gameMusicMuted}
         keyboardInputActive={keyboardInputActive}
         laneGridStyle={laneGridStyle}
@@ -1875,6 +1990,7 @@ function GameScreen({
   elapsedSeconds,
   feedbacks,
   hand,
+  latencyDiagnostics,
   musicMuted,
   keyboardInputActive,
   laneGridStyle,
@@ -1896,6 +2012,7 @@ function GameScreen({
   elapsedSeconds: number;
   feedbacks: Feedback[];
   hand: Hand;
+  latencyDiagnostics: RealtimeLatencyDiagnostics;
   musicMuted: boolean;
   keyboardInputActive: boolean;
   laneGridStyle: CSSProperties;
@@ -1988,6 +2105,15 @@ function GameScreen({
             </span>
             <span className="game-pill">
               {hand === "left" ? "Mão esquerda" : "Mão direita"}
+            </span>
+            <span className="game-pill tabular-nums">
+              Lat {formatMs(latencyDiagnostics.transportDelayMs)}
+            </span>
+            <span className="game-pill tabular-nums">
+              Jit {formatMs(latencyDiagnostics.jitterMs)}
+            </span>
+            <span className="game-pill tabular-nums">
+              Seq {latencyDiagnostics.lastSequence ?? "--"}
             </span>
             <button
               className="finish-game-button"
