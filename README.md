@@ -175,7 +175,6 @@ Comandos opcionais:
 - `rehab/devices/{device_id}/commands/start_session`
 - `rehab/devices/{device_id}/commands/end_session`
 - `rehab/devices/{device_id}/commands/calibrate`
-- `rehab/devices/{device_id}/commands/tare`
 - `rehab/devices/{device_id}/commands/ping`
 
 ## Exemplos de payload
@@ -305,6 +304,7 @@ Batch de pressao:
 - `GET /api/v1/game-sessions`
 - `GET /api/v1/game-sessions/{session_id}`
 - `PATCH /api/v1/game-sessions/{session_id}/finish`
+- `POST /api/v1/devices/{device_id}/calibrate-pressure`
 - `POST /api/v1/ingest/batches/buttons`
 - `POST /api/v1/ingest/batches/pressure`
 - `GET /api/v1/metrics/sessions/{session_id}/summary`

@@ -41,6 +41,14 @@ class FakeMqttPublisher:
             }
         )
 
+    async def publish_calibrate_pressure(self, device_id: str, payload: dict) -> None:
+        self.messages.append(
+            {
+                "topic": f"rehab/devices/{device_id}/commands/calibrate",
+                "payload": payload,
+            }
+        )
+
 
 @pytest.fixture
 def mqtt_publisher() -> FakeMqttPublisher:

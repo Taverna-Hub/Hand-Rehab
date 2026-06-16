@@ -219,6 +219,39 @@ async def test_finish_persists_gameplay_metrics_for_dashboard(client):
 
 
 @pytest.mark.anyio
+async def test_calibrate_pressure_publishes_mqtt_when_idle(client, mqtt_publisher):
+    response = await client.post("/api/v1/devices/esp32-001/calibrate-pressure")
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["device_id"] == "esp32-001"
+    assert payload["status"] == "queued"
+    assert isinstance(payload["timestamp_ms"], int)
+    assert mqtt_publisher.messages == [
+        {
+            "topic": "rehab/devices/esp32-001/commands/calibrate",
+            "payload": {
+                "device_id": "esp32-001",
+                "requested_at_ms": payload["timestamp_ms"],
+            },
+        }
+    ]
+
+
+@pytest.mark.anyio
+async def test_calibrate_pressure_rejects_active_session_without_mqtt(client, mqtt_publisher):
+    user = await create_user(client)
+    await create_session(client, user["id"])
+    message_count = len(mqtt_publisher.messages)
+
+    response = await client.post("/api/v1/devices/esp32-001/calibrate-pressure")
+
+    assert response.status_code == 409
+    assert response.json() == {"detail": "active_session_exists"}
+    assert len(mqtt_publisher.messages) == message_count
+
+
+@pytest.mark.anyio
 async def test_finish_rejects_already_finished_session_without_extra_mqtt(client, mqtt_publisher):
     user = await create_user(client)
     session = await create_session(client, user["id"])

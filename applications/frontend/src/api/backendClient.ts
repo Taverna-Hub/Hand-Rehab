@@ -79,6 +79,12 @@ export interface GameSessionFinishPayload {
   gameplay_metrics?: GameplayMetricsPayload | null;
 }
 
+export interface PressureCalibrationResponse {
+  device_id: string;
+  status: "queued";
+  timestamp_ms: number;
+}
+
 export type BenchmarkStatus = "running" | "completed" | "failed" | "cancelled";
 export type BenchmarkStrategy = "ring_buffer" | "inefficient_shift_buffer";
 export type BenchmarkOperation = "sliding_insert";
@@ -189,6 +195,12 @@ export function finishGameSession(sessionId: string, payload: GameSessionFinishP
   return requestJson<GameSessionRead>(`/api/v1/game-sessions/${sessionId}/finish`, {
     body: JSON.stringify(payload),
     method: "PATCH",
+  });
+}
+
+export function calibratePressure(deviceId = "esp32-001") {
+  return requestJson<PressureCalibrationResponse>(`/api/v1/devices/${encodeURIComponent(deviceId)}/calibrate-pressure`, {
+    method: "POST",
   });
 }
 

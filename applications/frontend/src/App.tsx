@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import {
   backendApiUrl,
+  calibratePressure,
   createUser,
   finishGameSession,
   listActiveSessions,
@@ -135,6 +136,13 @@ interface Feedback {
   label: string;
   tone: FeedbackTone;
   laneId: number;
+}
+
+type CalibrationPhase = "idle" | "pending" | "queued" | "running" | "completed" | "failed" | "rejected";
+
+interface CalibrationState {
+  phase: CalibrationPhase;
+  message: string;
 }
 
 type LaneCooldowns = Record<number, number>;
@@ -481,7 +489,25 @@ function formatApiError(value: string) {
   if (value.toLowerCase() === "not found") {
     return "Recurso não encontrado";
   }
+  if (value === "active_session_exists") {
+    return "Finalize o jogo ativo antes de continuar.";
+  }
   return value;
+}
+
+function calibrationStateFromSessionEvent(event: RealtimeSessionEvent): CalibrationState | null {
+  switch (event.status) {
+    case "calibration_started":
+      return { message: "Calibração em andamento. Mantenha o sensor sem pressão.", phase: "running" };
+    case "calibration_completed":
+      return { message: "Calibração concluída.", phase: "completed" };
+    case "calibration_failed":
+      return { message: "Falha na calibração. Verifique o sensor e tente novamente.", phase: "failed" };
+    case "calibration_rejected":
+      return { message: "Dispositivo ocupado. Finalize atividades ativas antes de calibrar.", phase: "rejected" };
+    default:
+      return null;
+  }
 }
 
 function modeLabel(mode: GameMode) {
@@ -549,6 +575,7 @@ export default function App() {
   const [lastInputs, setLastInputs] = useState<LastInput[]>([]);
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [sessionSignal, setSessionSignal] = useState("aguardando");
+  const [calibrationState, setCalibrationState] = useState<CalibrationState>({ message: "Pronta para calibrar.", phase: "idle" });
   const [connectionStatus, setConnectionStatus] = useState<RealtimeConnectionStatus>("connecting");
   const [latencyDiagnostics, setLatencyDiagnostics] = useState<RealtimeLatencyDiagnostics>(() => ({
     inputCompensationMs: realtimeInputLatencyCompensationMs(),
@@ -967,6 +994,10 @@ export default function App() {
 
       if (isSessionEvent(event)) {
         setSessionSignal(event.event_type ?? event.status ?? "sessão");
+        const nextCalibrationState = calibrationStateFromSessionEvent(event);
+        if (nextCalibrationState) {
+          setCalibrationState(nextCalibrationState);
+        }
         return;
       }
 
@@ -1260,6 +1291,26 @@ export default function App() {
     }
   }
 
+  async function handleCalibratePressure() {
+    setApiBusy(true);
+    setApiError(null);
+    setCalibrationState({ message: "Enviando comando de calibração.", phase: "pending" });
+    try {
+      await calibratePressure();
+      setCalibrationState({ message: "Comando enviado. Aguardando ESP32.", phase: "queued" });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : "erro_ao_calibrar";
+      if (message === "active_session_exists") {
+        setCalibrationState({ message: "Finalize o jogo ativo antes de calibrar.", phase: "rejected" });
+      } else {
+        setCalibrationState({ message: formatApiError(message), phase: "failed" });
+      }
+      setApiError(message);
+    } finally {
+      setApiBusy(false);
+    }
+  }
+
   async function handleFinishSession() {
     if (!activeSession) {
       return;
@@ -1323,11 +1374,14 @@ export default function App() {
           onPatients={() => navigate({ name: "patients" })}
         >
           <GameSetup
+            activeSession={activeSession}
             apiBusy={apiBusy}
+            calibrationState={calibrationState}
             hand={hand}
             patient={selectedUser}
             uiMode={uiMode}
             onBack={() => navigate({ name: "patient", userId: selectedUser.id })}
+            onCalibrate={handleCalibratePressure}
             onHandChange={setHand}
             onStart={handleStartSession}
             onUiModeChange={setUiMode}
@@ -1867,24 +1921,34 @@ function PatientDashboard({
 }
 
 function GameSetup({
+  activeSession,
   apiBusy,
+  calibrationState,
   hand,
   patient,
   uiMode,
   onBack,
+  onCalibrate,
   onHandChange,
   onStart,
   onUiModeChange,
 }: {
+  activeSession: GameSessionRead | null;
   apiBusy: boolean;
+  calibrationState: CalibrationState;
   hand: Hand;
   patient: UserRead;
   uiMode: UiMode;
   onBack: () => void;
+  onCalibrate: () => void;
   onHandChange: (value: Hand) => void;
   onStart: () => void;
   onUiModeChange: (value: UiMode) => void;
 }) {
+  const calibrationBusy = calibrationState.phase === "pending" || calibrationState.phase === "queued" || calibrationState.phase === "running";
+  const controlsDisabled = apiBusy || calibrationBusy;
+  const calibrationDisabled = apiBusy || calibrationBusy || activeSession !== null;
+
   return (
     <section className="min-h-[calc(100vh-73px)] p-8">
       <div className="game-setup-panel">
@@ -1910,10 +1974,10 @@ function GameSetup({
 
         <div className="mt-8 grid gap-5 xl:grid-cols-[minmax(0,1fr)_320px]">
           <div className="grid gap-4 sm:grid-cols-2">
-            <ChoiceButton active={uiMode === "single"} disabled={apiBusy} icon={Gauge} label="1 faixa" meta="Pressão" onClick={() => onUiModeChange("single")} />
-            <ChoiceButton active={uiMode === "four"} disabled={apiBusy} icon={SlidersHorizontal} label="4 faixas" meta="Botões" onClick={() => onUiModeChange("four")} />
-            <ChoiceButton active={hand === "left"} disabled={apiBusy} icon={HandIcon} label="Mão esquerda" meta="left" onClick={() => onHandChange("left")} />
-            <ChoiceButton active={hand === "right"} disabled={apiBusy} icon={HandIcon} label="Mão direita" meta="right" onClick={() => onHandChange("right")} />
+            <ChoiceButton active={uiMode === "single"} disabled={controlsDisabled} icon={Gauge} label="1 faixa" meta="Pressão" onClick={() => onUiModeChange("single")} />
+            <ChoiceButton active={uiMode === "four"} disabled={controlsDisabled} icon={SlidersHorizontal} label="4 faixas" meta="Botões" onClick={() => onUiModeChange("four")} />
+            <ChoiceButton active={hand === "left"} disabled={controlsDisabled} icon={HandIcon} label="Mão esquerda" meta="left" onClick={() => onHandChange("left")} />
+            <ChoiceButton active={hand === "right"} disabled={controlsDisabled} icon={HandIcon} label="Mão direita" meta="right" onClick={() => onHandChange("right")} />
           </div>
 
           <aside className="start-panel">
@@ -1928,13 +1992,27 @@ function GameSetup({
             </div>
             <button
               className="start-button"
-              disabled={apiBusy}
+              disabled={controlsDisabled}
               type="button"
               onClick={onStart}
             >
               <Gamepad2 aria-hidden className="h-5 w-5" />
               Iniciar jogo
             </button>
+            <div className="grid gap-2">
+              <button
+                className="secondary-button w-full disabled:opacity-50"
+                disabled={calibrationDisabled}
+                type="button"
+                onClick={onCalibrate}
+              >
+                <Gauge aria-hidden className="mr-2 h-4 w-4" />
+                Calibrar pressão
+              </button>
+              <p className="text-xs font-semibold leading-5 text-[color:var(--muted)]">
+                {activeSession ? "Finalize o jogo ativo antes de calibrar." : calibrationState.message}
+              </p>
+            </div>
           </aside>
         </div>
       </div>
