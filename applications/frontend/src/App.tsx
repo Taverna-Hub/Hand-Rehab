@@ -66,6 +66,7 @@ const NOTE_FADE_MS = 650;
 const FEEDBACK_LIFETIME_MS = 1_250;
 const PRESSURE_HIT_KPA = 0.5;
 const HOLD_NOTE_DURATION_MS = BEAT_INTERVAL_MS * 2;
+const SESSION_START_COUNTDOWN_MS = 3_000;
 
 const FOUR_LANE_PATTERN = [1, 2, 3, 4, 2, 4, 1, 3, 1, 4, 2, 3];
 
@@ -571,6 +572,7 @@ export default function App() {
   const [pressedLanes, setPressedLanes] = useState<Record<number, boolean>>({});
   const [pressureValue, setPressureValue] = useState<number | null>(null);
   const [pressureActive, setPressureActive] = useState(false);
+  const [sessionWarmupUntilMs, setSessionWarmupUntilMs] = useState<number | null>(null);
   const [gameMusicMuted, setGameMusicMuted] = useState(false);
   const [lastInputs, setLastInputs] = useState<LastInput[]>([]);
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
@@ -603,6 +605,7 @@ export default function App() {
   const realtimeInputCompensationMsRef = useRef(realtimeInputLatencyCompensationMs());
   const realtimeLastSequenceRef = useRef<Record<string, number>>({});
   const realtimeTransportDelaysRef = useRef<number[]>([]);
+  const sessionWarmupUntilMsRef = useRef<number | null>(null);
   const gameMusicRef = useRef<HTMLAudioElement | null>(null);
   const lossStreakSoundRef = useRef<HTMLAudioElement | null>(null);
   const mistakeSoundRef = useRef<HTMLAudioElement | null>(null);
@@ -694,6 +697,9 @@ export default function App() {
   const elapsedSeconds = activeSession
     ? Math.max(0, Math.floor((Date.now() - Date.parse(activeSession.started_at)) / 1000))
     : 0;
+  const sessionWarmupRemainingMs = sessionWarmupUntilMs
+    ? Math.max(0, Math.ceil(sessionWarmupUntilMs - (nowMs || performance.now())))
+    : 0;
 
   useEffect(() => {
     if (routeUserId) {
@@ -731,6 +737,10 @@ export default function App() {
   useEffect(() => {
     pressureActiveRef.current = pressureActive;
   }, [pressureActive]);
+
+  useEffect(() => {
+    sessionWarmupUntilMsRef.current = sessionWarmupUntilMs;
+  }, [sessionWarmupUntilMs]);
 
   const pushFeedback = useCallback((label: string, tone: FeedbackTone, laneId = 1) => {
     feedbackIdRef.current += 1;
@@ -827,6 +837,7 @@ export default function App() {
       setSelectedUserId(session.user_id);
       setSessionSignal("sessão ativa");
       resetLocalGame();
+      setSessionWarmupUntilMs(performance.now() + SESSION_START_COUNTDOWN_MS);
     },
     [resetLocalGame],
   );
@@ -1017,9 +1028,13 @@ export default function App() {
 
       const inputTime = getCorrectedRealtimeInputTime(event, receivedAt);
       const realtimeHitWindowMs = HIT_WINDOW_MS + REALTIME_JITTER_GRACE_MS;
+      const isWarmingUp = Boolean(sessionWarmupUntilMsRef.current && receivedAt < sessionWarmupUntilMsRef.current);
 
       if (isButtonEvent(event)) {
         setPressedLanes((current) => ({ ...current, [event.button_id]: event.event_type === "pressed" }));
+        if (isWarmingUp) {
+          return;
+        }
         if (event.event_type === "pressed") {
           registerHit(event.button_id, inputTime, realtimeHitWindowMs);
         } else {
@@ -1038,6 +1053,10 @@ export default function App() {
 
         const isAboveThreshold = pressureKpa >= PRESSURE_HIT_KPA;
         setPressureActive(isAboveThreshold);
+        if (isWarmingUp) {
+          pressureAboveThresholdRef.current = isAboveThreshold;
+          return;
+        }
         if (isAboveThreshold && !pressureAboveThresholdRef.current) {
           registerHit(1, inputTime, realtimeHitWindowMs);
         } else if (!isAboveThreshold && pressureAboveThresholdRef.current) {
@@ -1088,6 +1107,7 @@ export default function App() {
       }
 
       const key = event.key.toLowerCase();
+      const isWarmingUp = Boolean(sessionWarmupUntilMsRef.current && performance.now() < sessionWarmupUntilMsRef.current);
       const isPressureKey = key === " " || key === "spacebar" || key === "1" || key === "a";
       if (activeSession.mode === "pressure") {
         if (!isPressureKey) {
@@ -1096,6 +1116,9 @@ export default function App() {
         event.preventDefault();
         setPressureActive(true);
         setPressureValue(PRESSURE_HIT_KPA);
+        if (isWarmingUp) {
+          return;
+        }
         registerHit(1);
         return;
       }
@@ -1106,6 +1129,9 @@ export default function App() {
       }
       event.preventDefault();
       setPressedLanes((current) => ({ ...current, [laneId]: true }));
+      if (isWarmingUp) {
+        return;
+      }
       registerHit(laneId);
     };
 
@@ -1115,9 +1141,13 @@ export default function App() {
       }
 
       const key = event.key.toLowerCase();
+      const isWarmingUp = Boolean(sessionWarmupUntilMsRef.current && performance.now() < sessionWarmupUntilMsRef.current);
       if (activeSession.mode === "pressure" && (key === " " || key === "spacebar" || key === "1" || key === "a")) {
         setPressureActive(false);
         setPressureValue(null);
+        if (isWarmingUp) {
+          return;
+        }
         releaseHold(1);
         return;
       }
@@ -1125,6 +1155,9 @@ export default function App() {
       const laneId = laneByKey[key];
       if (laneId) {
         setPressedLanes((current) => ({ ...current, [laneId]: false }));
+        if (isWarmingUp) {
+          return;
+        }
         releaseHold(laneId);
       }
     };
@@ -1145,6 +1178,24 @@ export default function App() {
     let frame = 0;
     const tick = () => {
       const now = performance.now();
+      const warmupUntil = sessionWarmupUntilMsRef.current;
+      if (warmupUntil && now < warmupUntil) {
+        localGameStartRef.current = null;
+        nextBeatIndexRef.current = 0;
+        if (notesRef.current.length > 0) {
+          notesRef.current = [];
+          setNotes([]);
+        }
+        setNowMs(now);
+        frame = requestAnimationFrame(tick);
+        return;
+      }
+
+      if (warmupUntil && now >= warmupUntil) {
+        sessionWarmupUntilMsRef.current = null;
+        setSessionWarmupUntilMs(null);
+      }
+
       const gameStart = localGameStartRef.current ?? now;
       localGameStartRef.current = gameStart;
       setNowMs(now);
@@ -1408,6 +1459,7 @@ export default function App() {
         pressedLanes={pressedLanes}
         pressureActive={pressureActive}
         pressureValue={pressureValue}
+        sessionWarmupRemainingMs={sessionWarmupRemainingMs}
         stats={stats}
         onFinish={handleFinishSession}
         onMusicMutedChange={handleGameMusicMutedChange}
@@ -2077,6 +2129,7 @@ function GameScreen({
   pressedLanes,
   pressureActive,
   pressureValue,
+  sessionWarmupRemainingMs,
   stats,
   onFinish,
   onMusicMutedChange,
@@ -2099,6 +2152,7 @@ function GameScreen({
   pressedLanes: Record<number, boolean>;
   pressureActive: boolean;
   pressureValue: number | null;
+  sessionWarmupRemainingMs: number;
   stats: ScoreStats;
   onFinish: () => void;
   onMusicMutedChange: (muted: boolean) => void;
@@ -2135,6 +2189,7 @@ function GameScreen({
 
   const currentComboTier = comboTier(stats.combo);
   const currentMultiplier = comboMultiplier(stats.combo);
+  const warmupSeconds = Math.ceil(sessionWarmupRemainingMs / 1000);
 
   return (
     <main className="h-screen overflow-hidden bg-[color:var(--prussian-blue)] text-white">
@@ -2220,6 +2275,11 @@ function GameScreen({
           {isComboBreak ? (
             <div className="combo-break-overlay" key={`break-${comboBreakId}`}>
               <span>Combo perdido</span>
+            </div>
+          ) : null}
+          {sessionWarmupRemainingMs > 0 ? (
+            <div className="combo-break-overlay" key="session-warmup">
+              <span className="tabular-nums">{warmupSeconds}</span>
             </div>
           ) : null}
         </div>
