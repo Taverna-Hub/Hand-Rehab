@@ -68,15 +68,15 @@ static const uint32_t PRESSURE_SAMPLE_INTERVAL_MS = 100;
 static const uint32_t PRESSURE_SERIAL_PRINT_INTERVAL_MS = 500;
 static const uint32_t MQTT_LOOP_INTERVAL_MS = 10;
 static const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 2;
-static const uint32_t MQTT_TCP_CONNECT_TIMEOUT_MS = 2000;
 static const uint16_t MQTT_KEEP_ALIVE_SECONDS = 15;
 static const uint32_t MQTT_RECONNECT_INTERVAL_MS = 2000;
 static const size_t MQTT_QUEUE_DRAIN_LIMIT = 4;
-static const uint32_t BATCH_PUBLISH_INTERVAL_MS = 5000;
+static const uint32_t BATCH_PUBLISH_INTERVAL_MS = 1000;
 static const uint32_t STATUS_LED_BLINK_INTERVAL_MS = 500;
 static const uint32_t STATUS_LED_IDLE_POLL_INTERVAL_MS = 100;
 static const uint8_t PRESSURE_SAMPLE_COUNT = 3;
 static const uint8_t PRESSURE_CALIBRATION_SAMPLE_COUNT = 20;
+static const uint8_t PRESSURE_CALIBRATION_MIN_VALID_SAMPLES = 8;
 static const uint32_t PRESSURE_CALIBRATION_SAMPLE_DELAY_MS = 30;
 static const uint32_t PRESSURE_MIN_HIT_DELTA_RAW = 700;
 static const uint32_t PRESSURE_MIN_RELEASE_DELTA_RAW = 350;
@@ -85,7 +85,7 @@ static const uint8_t HX710B_TOTAL_CLOCK_PULSES = 27;
 static const uint32_t HX710B_READY_TIMEOUT_MS = 250;
 
 static const size_t BATCH_BUFFER_CAPACITY = 64;
-static const size_t BATCH_MAX_ITEMS = 6;
+static const size_t BATCH_MAX_ITEMS = 12;
 static const size_t MAX_BATCH_FLUSH_ATTEMPTS = (BATCH_BUFFER_CAPACITY / BATCH_MAX_ITEMS + 2) * 2;
 static const size_t MQTT_QUEUED_PAYLOAD_SIZE = 512;
 static const size_t BENCHMARK_MAX_SAMPLE_COUNTS = 6;
@@ -229,7 +229,7 @@ static long pressureBaselineRaw = PRESSURE_ZERO_OFFSET_RAW;
 static uint32_t pressureNoiseRaw = 0;
 static uint32_t pressureHitThresholdRaw = PRESSURE_MIN_HIT_DELTA_RAW;
 static uint32_t pressureReleaseThresholdRaw = PRESSURE_MIN_RELEASE_DELTA_RAW;
-static bool pressureCalibrationReady = PRESSURE_ZERO_OFFSET_RAW != 0L;
+static bool pressureCalibrationReady = false;
 
 static void copyText(char *destination, size_t destination_size, const char *source) {
   if (destination_size == 0) {
@@ -1141,18 +1141,6 @@ static void connectMqtt() {
 
   Serial.print("Conectando ao MQTT...");
   const uint32_t startedAt = millis();
-  wifiClient.stop();
-  if (!wifiClient.connect(APP_MQTT_HOST, APP_MQTT_PORT, MQTT_TCP_CONNECT_TIMEOUT_MS)) {
-    xEventGroupClearBits(systemEvents, MQTT_CONNECTED_BIT);
-    Serial.print("falha TCP em ");
-    Serial.print(millis() - startedAt);
-    Serial.println(" ms");
-    wifiClient.stop();
-    return;
-  }
-
-  vTaskDelay(pdMS_TO_TICKS(1));
-
   if (mqttClient.connect(APP_DEVICE_ID, statusTopic, 1, true, willPayload)) {
     Serial.print("conectado em ");
     Serial.print(millis() - startedAt);
@@ -1291,20 +1279,24 @@ static void handleCalibratePressureCommand(byte *payload, unsigned int length) {
   }
 
   publishCalibrationStatus("calibration_started");
+  pressureCalibrationReady = false;
   resetHx710b();
 
   int64_t sum = 0;
   long minRaw = LONG_MAX;
   long maxRaw = LONG_MIN;
   uint8_t acceptedSamples = 0;
+  uint8_t failedSamples = 0;
+  const uint8_t maxAttempts = PRESSURE_CALIBRATION_SAMPLE_COUNT * 3;
 
-  for (uint8_t i = 0; i < PRESSURE_CALIBRATION_SAMPLE_COUNT; i++) {
+  for (uint8_t attempt = 0; attempt < maxAttempts && acceptedSamples < PRESSURE_CALIBRATION_SAMPLE_COUNT; attempt++) {
     const long raw = readHx710bRaw();
     if (raw == LONG_MIN) {
+      failedSamples++;
       resetHx710b();
-      Serial.printf("Calibracao falhou: timeout na amostra %u\n", static_cast<unsigned>(i + 1));
-      publishCalibrationStatus("calibration_failed", "hx710b_timeout");
-      return;
+      Serial.printf("Calibracao: timeout na tentativa %u\n", static_cast<unsigned>(attempt + 1));
+      vTaskDelay(pdMS_TO_TICKS(PRESSURE_CALIBRATION_SAMPLE_DELAY_MS));
+      continue;
     }
 
     sum += raw;
@@ -1318,8 +1310,11 @@ static void handleCalibratePressureCommand(byte *payload, unsigned int length) {
     vTaskDelay(pdMS_TO_TICKS(PRESSURE_CALIBRATION_SAMPLE_DELAY_MS));
   }
 
-  if (acceptedSamples == 0) {
-    publishCalibrationStatus("calibration_failed", "missing_samples");
+  if (acceptedSamples < PRESSURE_CALIBRATION_MIN_VALID_SAMPLES) {
+    Serial.printf("Calibracao falhou: samples=%u timeouts=%u\n",
+                  static_cast<unsigned>(acceptedSamples),
+                  static_cast<unsigned>(failedSamples));
+    publishCalibrationStatus("calibration_failed", "insufficient_valid_samples");
     return;
   }
 
@@ -1337,12 +1332,13 @@ static void handleCalibratePressureCommand(byte *payload, unsigned int length) {
   pressureReleaseThresholdRaw = releaseThresholdRaw;
   pressureCalibrationReady = true;
 
-  Serial.printf("Calibracao concluida: baseline=%ld noise=%lu hit_delta=%lu release_delta=%lu samples=%u\n",
+  Serial.printf("Calibracao concluida: baseline=%ld noise=%lu hit_delta=%lu release_delta=%lu samples=%u timeouts=%u\n",
                 pressureBaselineRaw,
                 static_cast<unsigned long>(pressureNoiseRaw),
                 static_cast<unsigned long>(pressureHitThresholdRaw),
                 static_cast<unsigned long>(pressureReleaseThresholdRaw),
-                static_cast<unsigned>(acceptedSamples));
+                static_cast<unsigned>(acceptedSamples),
+                static_cast<unsigned>(failedSamples));
   publishCalibrationStatus("calibration_completed");
 }
 
