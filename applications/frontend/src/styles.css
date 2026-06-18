@@ -869,6 +869,65 @@ button:disabled {
   pointer-events: none;
 }
 
+.game-chord-links {
+  z-index: 24;
+  pointer-events: none;
+}
+
+.game-chord-link {
+  --chord-end-color: #60a5fa;
+  --chord-left: 0%;
+  --chord-start-color: #f87171;
+  --chord-top: 0%;
+  --chord-width: 0%;
+  position: absolute;
+  left: var(--chord-left);
+  top: var(--chord-top);
+  width: var(--chord-width);
+  height: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background:
+    linear-gradient(90deg, var(--chord-start-color), rgba(255, 255, 255, 0.92), var(--chord-end-color)),
+    rgba(255, 255, 255, 0.42);
+  box-shadow:
+    0 0 14px rgba(255, 255, 255, 0.45),
+    0 0 34px color-mix(in srgb, var(--chord-start-color) 42%, transparent),
+    0 0 34px color-mix(in srgb, var(--chord-end-color) 42%, transparent);
+  opacity: 0.88;
+  transform: translate3d(0, -50%, 0);
+  will-change: top, opacity, transform;
+}
+
+.game-chord-link::before,
+.game-chord-link::after {
+  content: "";
+  position: absolute;
+  top: 50%;
+  width: 18px;
+  height: 18px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.92);
+  box-shadow: 0 0 16px rgba(255, 255, 255, 0.72);
+  transform: translate3d(-50%, -50%, 0);
+}
+
+.game-chord-link::before {
+  left: 0;
+}
+
+.game-chord-link::after {
+  left: 100%;
+}
+
+.game-chord-link.holding {
+  animation: chord-link-pulse 520ms ease-in-out infinite alternate;
+}
+
+.game-chord-link.hit {
+  animation: chord-link-hit 260ms ease-out both;
+}
+
 .game-note-position {
   --hold-end-top: 0%;
   --note-color: #22c55e;
@@ -1323,6 +1382,28 @@ button:disabled {
   100% {
     opacity: 0;
     transform: translate3d(-50%, -50%, 0) rotate(var(--spark-angle)) translateY(-68px) scaleY(1);
+  }
+}
+
+@keyframes chord-link-pulse {
+  from {
+    filter: brightness(1);
+    opacity: 0.82;
+  }
+  to {
+    filter: brightness(1.45);
+    opacity: 1;
+  }
+}
+
+@keyframes chord-link-hit {
+  0% {
+    opacity: 0.95;
+    transform: translate3d(0, -50%, 0) scaleX(1);
+  }
+  100% {
+    opacity: 0;
+    transform: translate3d(0, -50%, 0) scaleX(0.58);
   }
 }
 

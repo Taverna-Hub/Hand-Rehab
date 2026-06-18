@@ -2468,6 +2468,52 @@ function GameScreen({
   const currentComboTier = comboTier(stats.combo);
   const currentMultiplier = comboMultiplier(stats.combo);
   const warmupSeconds = Math.ceil(sessionWarmupRemainingMs / 1000);
+  const chordLinks = useMemo(() => {
+    if (activeUiMode !== "four" || activeLanes.length < 2) {
+      return [];
+    }
+
+    const laneIndexes = new Map(activeLanes.map((lane, index) => [lane.id, index]));
+    const notesByHitAt = new Map<number, ActiveNote[]>();
+
+    for (const note of notes) {
+      if (note.status === "miss" || !laneIndexes.has(note.laneId)) {
+        continue;
+      }
+
+      const group = notesByHitAt.get(note.hitAt) ?? [];
+      group.push(note);
+      notesByHitAt.set(note.hitAt, group);
+    }
+
+    return Array.from(notesByHitAt.entries()).flatMap(([hitAt, simultaneousNotes]) => {
+      const sortedNotes = simultaneousNotes.sort((left, right) => (laneIndexes.get(left.laneId) ?? 0) - (laneIndexes.get(right.laneId) ?? 0));
+      const firstLaneIndex = laneIndexes.get(sortedNotes[0]?.laneId ?? -1);
+      const lastLaneIndex = laneIndexes.get(sortedNotes[sortedNotes.length - 1]?.laneId ?? -1);
+
+      if (sortedNotes.length < 2 || firstLaneIndex === undefined || lastLaneIndex === undefined) {
+        return [];
+      }
+
+      const allHit = sortedNotes.every((note) => note.status === "hit");
+      const anyHolding = sortedNotes.some((note) => note.status === "holding");
+      const visualTime = allHit ? Math.max(...sortedNotes.map((note) => note.judgedAt ?? nowMs)) : nowMs;
+      const firstLane = LANES[sortedNotes[0].laneId];
+      const lastLane = LANES[sortedNotes[sortedNotes.length - 1].laneId];
+      const laneCount = activeLanes.length;
+
+      return [{
+        endColor: lastLane.color,
+        isHit: allHit,
+        isHolding: anyHolding,
+        key: `${hitAt}-${sortedNotes.map((note) => note.laneId).join("-")}`,
+        leftPercent: ((firstLaneIndex + 0.5) / laneCount) * 100,
+        startColor: firstLane.color,
+        topPercent: noteTopPercent(sortedNotes[0], visualTime),
+        widthPercent: ((lastLaneIndex - firstLaneIndex) / laneCount) * 100,
+      }];
+    });
+  }, [activeLanes, activeUiMode, notes, nowMs]);
 
   return (
     <main className="h-screen overflow-hidden bg-[color:var(--prussian-blue)] text-white">
@@ -2575,6 +2621,28 @@ function GameScreen({
               >
                 <div className="absolute bottom-0 left-1/2 top-0 w-px -translate-x-1/2" style={{ backgroundColor: lane.line }} />
               </div>
+            ))}
+          </div>
+
+          <div className="game-chord-links absolute inset-0" aria-hidden="true">
+            {chordLinks.map((link) => (
+              <div
+                className={classNames(
+                  "game-chord-link",
+                  link.isHolding && "holding",
+                  link.isHit && "hit",
+                )}
+                key={link.key}
+                style={
+                  {
+                    "--chord-end-color": link.endColor,
+                    "--chord-left": `${link.leftPercent}%`,
+                    "--chord-start-color": link.startColor,
+                    "--chord-top": `${link.topPercent}%`,
+                    "--chord-width": `${link.widthPercent}%`,
+                  } as CSSProperties
+                }
+              />
             ))}
           </div>
 
