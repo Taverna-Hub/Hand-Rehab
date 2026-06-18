@@ -31,6 +31,7 @@ Payload de criacao:
 - `GET /api/v1/game-sessions/active`
 - `GET /api/v1/game-sessions/{session_id}`
 - `PATCH /api/v1/game-sessions/{session_id}/finish`
+- `POST /api/v1/devices/{device_id}/calibrate-pressure`
 
 Payload de inicio:
 
@@ -94,6 +95,28 @@ Se a sessao ja estiver finalizada ou nao estiver `running`, a API retorna:
 ```
 
 com status HTTP `409` e nao publica outro comando MQTT.
+
+## Dispositivos
+
+`POST /api/v1/devices/{device_id}/calibrate-pressure` dispara a calibracao do zero do sensor de pressao na ESP32 via MQTT em `rehab/devices/{device_id}/commands/calibrate`.
+
+Resposta aceita:
+
+```json
+{
+  "device_id": "esp32-001",
+  "status": "queued",
+  "timestamp_ms": 123456
+}
+```
+
+Se houver uma sessao `running`, a API retorna:
+
+```json
+{"detail": "active_session_exists"}
+```
+
+com status HTTP `409` e nao publica o comando de calibracao.
 
 ## Ingestao batch
 

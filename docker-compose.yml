@@ -30,6 +30,8 @@ services:
       MQTT_HOST: ${MQTT_HOST:-node-red}
       MQTT_PORT: ${MQTT_PORT:-1883}
       DEFAULT_DEVICE_ID: ${DEFAULT_DEVICE_ID:-esp32-001}
+      TELEGRAM_BOT_TOKEN: ${TELEGRAM_BOT_TOKEN:-}
+      TELEGRAM_CHAT_ID: ${TELEGRAM_CHAT_ID:-}
     ports:
       - "${BACKEND_PORT:-8000}:8000"
     depends_on:

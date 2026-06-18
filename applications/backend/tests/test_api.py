@@ -219,6 +219,45 @@ async def test_finish_persists_gameplay_metrics_for_dashboard(client):
 
 
 @pytest.mark.anyio
+async def test_finish_notifies_session_summary(client, session_finish_notifier):
+    user = await create_user(client)
+    session = await create_session(client, user["id"], mode="buttons", hand="right")
+
+    response = await client.patch(
+        f"/api/v1/game-sessions/{session['id']}/finish",
+        json={
+            "gameplay_metrics": {
+                "total_stimuli": 12,
+                "hits": 9,
+                "errors": 2,
+                "missed_stimuli": 3,
+                "score": 1250,
+                "max_combo": 5,
+                "avg_reaction_ms": 143.7,
+                "best_reaction_ms": 72,
+                "worst_reaction_ms": 246,
+                "accuracy_rate": 75,
+                "error_rate": 18.18,
+                "missed_rate": 25,
+                "precision_by_lane": {"1": 100, "2": 50, "3": 75, "4": 66.67},
+            }
+        },
+    )
+
+    assert response.status_code == 200, response.text
+    assert session_finish_notifier.notifications == [
+        {
+            "session_id": session["id"],
+            "user_name": user["name"],
+            "duration_seconds": response.json()["duration_seconds"],
+            "score": 1250,
+            "hits": 9,
+            "total_stimuli": 12,
+        }
+    ]
+
+
+@pytest.mark.anyio
 async def test_calibrate_pressure_publishes_mqtt_when_idle(client, mqtt_publisher):
     response = await client.post("/api/v1/devices/esp32-001/calibrate-pressure")
 

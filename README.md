@@ -72,10 +72,14 @@ NODE_RED_PORT=1880
 MQTT_PORT=1883
 MQTT_HOST=node-red
 DEFAULT_DEVICE_ID=esp32-001
+TELEGRAM_BOT_TOKEN=
+TELEGRAM_CHAT_ID=
 FRONTEND_PORT=5173
 VITE_BACKEND_API_URL=http://localhost:8000
 VITE_NODE_RED_WS_URL=ws://localhost:1880/ws/realtime
 ```
+
+`TELEGRAM_BOT_TOKEN` e `TELEGRAM_CHAT_ID` sao opcionais. Quando ambos estiverem definidos, o backend envia um resumo para o Telegram ao finalizar uma sessao.
 
 Suba a stack:
 
