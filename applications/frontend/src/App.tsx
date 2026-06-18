@@ -22,6 +22,18 @@ import {
   X,
 } from "lucide-react";
 import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  Legend,
+  Line,
+  LineChart,
+  ResponsiveContainer,
+  Tooltip,
+  XAxis,
+  YAxis,
+} from "recharts";
+import {
   backendApiUrl,
   calibratePressure,
   createUser,
@@ -71,6 +83,7 @@ const PRESSURE_CALIBRATION_TIMEOUT_MS = 12_000;
 const HOLD_NOTE_DURATION_MS = BEAT_INTERVAL_MS * 2;
 const SESSION_START_COUNTDOWN_MS = 3_000;
 const SESSION_START_ACK_TIMEOUT_MS = 8_000;
+const SESSION_DURATION_OPTIONS_MINUTES = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10];
 
 const FOUR_LANE_PATTERN = [1, 2, 3, 4, 2, 4, 1, 3, 1, 4, 2, 3];
 
@@ -78,6 +91,7 @@ type NoteStatus = "pending" | "holding" | "hit" | "miss";
 type HitQuality = "perfect" | "good";
 type FeedbackTone = "hit" | "miss" | "neutral";
 type IconType = typeof Users;
+type HandFilter = "left" | "right";
 type Route =
   | { name: "patients" }
   | { name: "patient"; userId: string }
@@ -114,6 +128,14 @@ interface ScoreStats {
   goods: number;
   reactionTimesMs: number[];
   laneStats: Record<number, LaneScoreStats>;
+}
+
+interface FinishedGameSummary {
+  durationSeconds: number;
+  hand: Hand;
+  metrics: GameplayMetricsPayload;
+  mode: GameMode;
+  userId: string;
 }
 
 interface LaneScoreStats {
@@ -689,6 +711,72 @@ function summarizeMetrics(metrics: GameplayMetricsRead[]) {
   };
 }
 
+function groupMetricsByDuration(metrics: GameplayMetricsRead[]) {
+  const groups = new Map<number, GameplayMetricsRead[]>();
+  for (const metric of metrics) {
+    if (typeof metric.duration_seconds !== "number" || metric.duration_seconds <= 0) {
+      continue;
+    }
+    const durationMinutes = Math.max(1, Math.round(metric.duration_seconds / 60));
+    groups.set(durationMinutes, [...(groups.get(durationMinutes) ?? []), metric]);
+  }
+
+  return SESSION_DURATION_OPTIONS_MINUTES
+    .map((minutes) => {
+      const durationMetrics = groups.get(minutes) ?? [];
+      const summary = summarizeMetrics(durationMetrics);
+      return {
+        accuracy: summary.averageAccuracy ?? 0,
+        count: durationMetrics.length,
+        label: `${minutes}m`,
+        minutes,
+        reaction: summary.averageReaction ?? 0,
+        scorePerMinute: durationMetrics.length > 0
+          ? Math.round(durationMetrics.reduce((total, metric) => total + metric.score / minutes, 0) / durationMetrics.length)
+          : 0,
+      };
+    })
+    .filter((item) => item.count > 0);
+}
+
+function averageLanePrecision(metrics: GameplayMetricsRead[], hand: HandFilter) {
+  const buttonMetrics = metrics.filter((metric) => metric.mode === "buttons" && metric.hand === hand);
+  return [1, 2, 3, 4].map((laneId) => {
+    const values = buttonMetrics
+      .map((metric) => metric.precision_by_lane[String(laneId)])
+      .filter((value): value is number => typeof value === "number");
+    return {
+      laneId,
+      value: average(values) ?? 0,
+    };
+  });
+}
+
+function handComparison(metrics: GameplayMetricsRead[]) {
+  return (["left", "right"] as HandFilter[]).map((hand) => {
+    const summary = summarizeMetrics(metrics.filter((metric) => metric.hand === hand));
+    return {
+      accuracy: summary.averageAccuracy ?? 0,
+      hand,
+      label: hand === "left" ? "Esquerda" : "Direita",
+      sessions: summary.finishedSessions,
+    };
+  });
+}
+
+function sessionPerformanceData(metrics: GameplayMetricsRead[]) {
+  return [...metrics]
+    .slice(0, 10)
+    .reverse()
+    .map((metric, index) => ({
+      accuracy: metric.accuracy_rate ?? 0,
+      errors: metric.error_rate ?? 0,
+      label: `${index + 1}`,
+      reaction: metric.avg_reaction_ms ?? 0,
+      score: metric.score,
+    }));
+}
+
 export default function App() {
   const { navigate, route } = useRoute();
   const [users, setUsers] = useState<UserRead[]>([]);
@@ -699,8 +787,11 @@ export default function App() {
   const [selectedUserId, setSelectedUserId] = useState("");
   const [uiMode, setUiMode] = useState<UiMode>("four");
   const [hand, setHand] = useState<Hand>("right");
+  const [sessionDurationMinutes, setSessionDurationMinutes] = useState(3);
   const [activeSession, setActiveSession] = useState<GameSessionRead | null>(null);
   const [pendingSession, setPendingSession] = useState<GameSessionRead | null>(null);
+  const [sessionEndNoticeVisible, setSessionEndNoticeVisible] = useState(false);
+  const [finishedGameSummary, setFinishedGameSummary] = useState<FinishedGameSummary | null>(null);
   const [notes, setNotes] = useState<ActiveNote[]>([]);
   const [stats, setStats] = useState<ScoreStats>(initialStats);
   const [dashboardMetrics, setDashboardMetrics] = useState<GameplayMetricsRead[]>([]);
@@ -738,6 +829,8 @@ export default function App() {
   const pressureActiveRef = useRef(false);
   const pressureAboveThresholdRef = useRef(false);
   const pressureCalibrationRef = useRef<PressureCalibration>(pressureCalibration);
+  const sessionEndNoticeVisibleRef = useRef(false);
+  const finishedGameSummaryRef = useRef<FinishedGameSummary | null>(null);
   const localGameStartRef = useRef<number | null>(null);
   const nextBeatIndexRef = useRef(0);
   const noteLaneCooldownsRef = useRef<LaneCooldowns>({});
@@ -856,6 +949,14 @@ export default function App() {
   useEffect(() => {
     pendingSessionRef.current = pendingSession;
   }, [pendingSession]);
+
+  useEffect(() => {
+    sessionEndNoticeVisibleRef.current = sessionEndNoticeVisible;
+  }, [sessionEndNoticeVisible]);
+
+  useEffect(() => {
+    finishedGameSummaryRef.current = finishedGameSummary;
+  }, [finishedGameSummary]);
 
   useEffect(() => {
     if (route.name === "play" && activeSession) {
@@ -1029,10 +1130,15 @@ export default function App() {
     (session: GameSessionRead) => {
       pendingSessionRef.current = null;
       setPendingSession(null);
+      setSessionEndNoticeVisible(false);
+      setFinishedGameSummary(null);
       activeSessionRef.current = session;
       setActiveSession(session);
       setUiMode(gameModeToUiMode(session.mode));
       setHand(session.hand);
+      if (session.duration_seconds) {
+        setSessionDurationMinutes(Math.max(1, Math.min(10, Math.round(session.duration_seconds / 60))));
+      }
       setSelectedUserId(session.user_id);
       setSessionSignal("sessão ativa");
       resetLocalGame();
@@ -1237,6 +1343,10 @@ export default function App() {
         return;
       }
 
+      if (sessionEndNoticeVisibleRef.current || finishedGameSummaryRef.current) {
+        return;
+      }
+
       const session = activeSessionRef.current;
       if (
         !session ||
@@ -1317,7 +1427,12 @@ export default function App() {
   }, [handleRealtimeEvent]);
 
   useEffect(() => {
-    if (!activeSession || !keyboardInputActive) {
+    if (
+      !activeSession ||
+      !keyboardInputActive ||
+      sessionEndNoticeVisible ||
+      finishedGameSummary
+    ) {
       return;
     }
 
@@ -1406,10 +1521,22 @@ export default function App() {
       window.removeEventListener("keydown", handleKeyDown);
       window.removeEventListener("keyup", handleKeyUp);
     };
-  }, [activeSession, keyboardInputActive, registerHit, releaseHold]);
+  }, [
+    activeSession,
+    finishedGameSummary,
+    keyboardInputActive,
+    registerHit,
+    releaseHold,
+    sessionEndNoticeVisible,
+  ]);
 
   useEffect(() => {
-    if (!activeSession || route.name !== "play") {
+    if (
+      !activeSession ||
+      route.name !== "play" ||
+      sessionEndNoticeVisible ||
+      finishedGameSummary
+    ) {
       return;
     }
 
@@ -1523,7 +1650,15 @@ export default function App() {
 
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [activeSession, awardHit, playGameSound, pushFeedback, route.name]);
+  }, [
+    activeSession,
+    awardHit,
+    finishedGameSummary,
+    playGameSound,
+    pushFeedback,
+    route.name,
+    sessionEndNoticeVisible,
+  ]);
 
   async function handleCreateUser(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -1556,6 +1691,7 @@ export default function App() {
     setApiError(null);
     try {
       const session = await startGameSession({
+        duration_seconds: sessionDurationMinutes * 60,
         hand,
         mode: uiModeToGameMode(uiMode),
         user_id: currentUserId,
@@ -1608,17 +1744,37 @@ export default function App() {
     }
   }
 
+  function completeFinishedGameRedirect() {
+    const summary = finishedGameSummaryRef.current;
+    if (!summary) {
+      return;
+    }
+
+    stopGameMusic();
+    activeSessionRef.current = null;
+    pendingSessionRef.current = null;
+    finishedGameSummaryRef.current = null;
+    setActiveSession(null);
+    setPendingSession(null);
+    setSessionEndNoticeVisible(false);
+    setFinishedGameSummary(null);
+    resetLocalGame();
+    navigate({ name: "patient", userId: summary.userId });
+  }
+
   async function handleFinishSession() {
-    if (!activeSession) {
+    if (!activeSession || finishedGameSummaryRef.current) {
       return;
     }
 
     setApiBusy(true);
     setApiError(null);
     try {
-      const userId = activeSession.user_id;
-      await finishGameSession(activeSession.id, {
-        gameplay_metrics: buildGameplayMetrics(statsRef.current),
+      const session = activeSession;
+      const gameplayMetrics = buildGameplayMetrics(statsRef.current);
+      const playedSeconds = Math.max(0, Math.floor((Date.now() - Date.parse(session.started_at)) / 1000));
+      await finishGameSession(session.id, {
+        gameplay_metrics: gameplayMetrics,
       });
       const metrics = await listGameplayMetrics().catch((metricsLoadError) => {
         setMetricsError(metricsLoadError instanceof Error ? metricsLoadError.message : "erro_ao_carregar_metricas");
@@ -1629,21 +1785,69 @@ export default function App() {
         setMetricsError(null);
       }
       stopGameMusic();
-      activeSessionRef.current = null;
-      pendingSessionRef.current = null;
-      setActiveSession(null);
-      setPendingSession(null);
       setSessionSignal("finalizada");
-      resetLocalGame();
-      pushFeedback("Fim", "neutral");
+      setSessionEndNoticeVisible(false);
+      setKeyboardInputActive(false);
+      setPressedLanes({});
+      setPressureActive(false);
+      setPressureValue(null);
+      setNotes([]);
+      notesRef.current = [];
+      setFinishedGameSummary({
+        durationSeconds: playedSeconds,
+        hand: session.hand,
+        metrics: gameplayMetrics,
+        mode: session.mode,
+        userId: session.user_id,
+      });
       await refreshUsers();
-      navigate({ name: "patient", userId });
     } catch (error) {
       setApiError(error instanceof Error ? error.message : "erro_ao_finalizar");
     } finally {
       setApiBusy(false);
     }
   }
+
+  useEffect(() => {
+    if (
+      !activeSession?.duration_seconds ||
+      activeSession.status !== "running" ||
+      sessionEndNoticeVisible ||
+      finishedGameSummary
+    ) {
+      return;
+    }
+
+    const finishAt = Date.parse(activeSession.started_at) + activeSession.duration_seconds * 1000;
+    const timeout = window.setTimeout(() => {
+      if (activeSessionRef.current?.id === activeSession.id) {
+        setSessionEndNoticeVisible(true);
+        setSessionSignal("finalizada");
+        setKeyboardInputActive(false);
+        setPressedLanes({});
+        setPressureActive(false);
+        setPressureValue(null);
+        setNotes([]);
+        notesRef.current = [];
+      }
+    }, Math.max(0, finishAt - Date.now()));
+
+    return () => window.clearTimeout(timeout);
+  }, [activeSession, finishedGameSummary, sessionEndNoticeVisible]);
+
+  useEffect(() => {
+    if (!sessionEndNoticeVisible || !activeSession || finishedGameSummary) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      if (activeSessionRef.current?.id === activeSession.id && !finishedGameSummaryRef.current) {
+        void handleFinishSession();
+      }
+    }, 1_500);
+
+    return () => window.clearTimeout(timeout);
+  }, [activeSession, finishedGameSummary, sessionEndNoticeVisible]);
 
   if (route.name === "benchmarks") {
     return <BenchmarkDashboard onBack={() => navigate({ name: "patients" })} />;
@@ -1682,9 +1886,11 @@ export default function App() {
             patient={selectedUser}
             pendingSession={pendingSession}
             sessionSignal={sessionSignal}
+            sessionDurationMinutes={sessionDurationMinutes}
             uiMode={uiMode}
             onBack={() => navigate({ name: "patient", userId: selectedUser.id })}
             onCalibrate={handleCalibratePressure}
+            onDurationMinutesChange={setSessionDurationMinutes}
             onHandChange={setHand}
             onStart={handleStartSession}
             onUiModeChange={setUiMode}
@@ -1701,6 +1907,7 @@ export default function App() {
         apiError={apiError}
         elapsedSeconds={elapsedSeconds}
         feedbacks={feedbacks}
+        finishedSummary={finishedGameSummary}
         hand={hand}
         latencyDiagnostics={latencyDiagnostics}
         musicMuted={gameMusicMuted}
@@ -1711,9 +1918,11 @@ export default function App() {
         pressedLanes={pressedLanes}
         pressureActive={pressureActive}
         pressureValue={pressureValue}
+        sessionEndNoticeVisible={sessionEndNoticeVisible}
         sessionWarmupRemainingMs={sessionWarmupRemainingMs}
         stats={stats}
         onFinish={handleFinishSession}
+        onFinishSummary={completeFinishedGameRedirect}
         onMusicMutedChange={handleGameMusicMutedChange}
         onStreakSound={playGameSound}
         onKeyboardInputChange={(enabled) => {
@@ -1871,6 +2080,9 @@ function PatientsHome({
       return groups;
     }, {});
   }, [metrics]);
+  const durationData = useMemo(() => groupMetricsByDuration(metrics), [metrics]);
+  const handData = useMemo(() => handComparison(metrics), [metrics]);
+  const performanceData = useMemo(() => sessionPerformanceData(metrics), [metrics]);
 
   return (
     <>
@@ -1906,6 +2118,11 @@ function PatientsHome({
             Métricas indisponíveis agora; pacientes e jogo continuam disponíveis.
           </p>
         ) : null}
+        <div className="mt-7 grid gap-4 xl:grid-cols-3">
+          <SessionPerformanceChart data={performanceData} />
+          <DurationPerformanceChart data={durationData} />
+          <HandComparisonChart data={handData} />
+        </div>
       </section>
 
       <section className="content-band">
@@ -2110,6 +2327,11 @@ function PatientDashboard({
   summary: ReturnType<typeof summarizeMetrics>;
   onPlay: () => void;
 }) {
+  const [precisionHand, setPrecisionHand] = useState<HandFilter>("right");
+  const durationData = useMemo(() => groupMetricsByDuration(metrics), [metrics]);
+  const lanePrecision = useMemo(() => averageLanePrecision(metrics, precisionHand), [metrics, precisionHand]);
+  const handData = useMemo(() => handComparison(metrics), [metrics]);
+  const performanceData = useMemo(() => sessionPerformanceData(metrics), [metrics]);
   return (
     <>
       <section className="page-panel">
@@ -2142,8 +2364,19 @@ function PatientDashboard({
         </div>
       </section>
 
-      <section className="content-band grid gap-5 lg:grid-cols-[minmax(0,1fr)_360px]">
-        <div className="data-surface">
+      <section className="content-band">
+        <div className="grid gap-5 xl:grid-cols-2">
+          <SessionPerformanceChart data={performanceData} />
+          <DurationPerformanceChart data={durationData} />
+          <HandComparisonChart data={handData} />
+          <FingerPrecisionChart
+            data={lanePrecision}
+            hand={precisionHand}
+            onHandChange={setPrecisionHand}
+          />
+        </div>
+
+        <div className="data-surface mt-5">
           <div className="border-b border-[color:var(--line)] p-5">
             <h3 className="flex items-center gap-2 text-lg font-extrabold text-[color:var(--platinum)]">
               <BarChart3 aria-hidden className="h-5 w-5 text-[color:var(--dark-goldenrod)]" />
@@ -2185,40 +2418,6 @@ function PatientDashboard({
             </div>
           </div>
         </div>
-
-        <aside className="subtle-panel p-5">
-          <h3 className="flex items-center gap-2 text-lg font-extrabold text-[color:var(--platinum)]">
-            <HandIcon aria-hidden className="h-5 w-5 text-[color:var(--dark-goldenrod)]" />
-            Precisão por dedo
-          </h3>
-          <div className="mt-4 space-y-4">
-            {metrics.filter((metric) => metric.mode === "buttons").length === 0 ? (
-              <p className="text-sm font-semibold text-[color:var(--muted)]">Sem sessões de botões ainda.</p>
-            ) : (
-              metrics
-                .filter((metric) => metric.mode === "buttons")
-                .slice(0, 5)
-                .map((metric) => (
-                  <div className="rounded-lg bg-[rgba(239,239,239,0.06)] p-3 shadow-sm" key={metric.session_id}>
-                    <div className="flex items-center justify-between gap-3">
-                      <p className="text-sm font-extrabold text-[color:var(--platinum)]">{formatDateTime(metric.finished_at)}</p>
-                      <span className="text-xs font-semibold text-[color:var(--muted)]">{metric.score} pts</span>
-                    </div>
-                    <div className="mt-3 grid grid-cols-4 gap-2">
-                      {[1, 2, 3, 4].map((laneId) => (
-                        <div className="text-center" key={laneId}>
-                          <div className="mx-auto h-3 w-8 rounded-full" style={{ backgroundColor: LANES[laneId].color }} />
-                          <p className="mt-1 text-xs font-extrabold tabular-nums text-[color:var(--platinum)]">
-                            {formatPercent(metric.precision_by_lane[String(laneId)] ?? null)}
-                          </p>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                ))
-            )}
-          </div>
-        </aside>
       </section>
     </>
   );
@@ -2233,9 +2432,11 @@ function GameSetup({
   patient,
   pendingSession,
   sessionSignal,
+  sessionDurationMinutes,
   uiMode,
   onBack,
   onCalibrate,
+  onDurationMinutesChange,
   onHandChange,
   onStart,
   onUiModeChange,
@@ -2248,9 +2449,11 @@ function GameSetup({
   patient: UserRead;
   pendingSession: GameSessionRead | null;
   sessionSignal: string;
+  sessionDurationMinutes: number;
   uiMode: UiMode;
   onBack: () => void;
   onCalibrate: () => void;
+  onDurationMinutesChange: (value: number) => void;
   onHandChange: (value: Hand) => void;
   onStart: () => void;
   onUiModeChange: (value: UiMode) => void;
@@ -2261,6 +2464,9 @@ function GameSetup({
   const calibrationDisabled = apiBusy || calibrationBusy || activeSession !== null || startPending;
   const displayedUiMode = pendingSession ? gameModeToUiMode(pendingSession.mode) : uiMode;
   const displayedHand = pendingSession?.hand ?? hand;
+  const displayedDurationMinutes = pendingSession?.duration_seconds
+    ? Math.round(pendingSession.duration_seconds / 60)
+    : sessionDurationMinutes;
   const websocketOpen = connectionStatus === "open";
   const startLabel = apiBusy ? "Enviando" : startPending ? "Sincronizando" : "Iniciar jogo";
 
@@ -2303,6 +2509,33 @@ function GameSetup({
             <ChoiceButton active={uiMode === "four"} disabled={controlsDisabled} icon={SlidersHorizontal} label="4 faixas" meta="Botões" onClick={() => onUiModeChange("four")} />
             <ChoiceButton active={hand === "left"} disabled={controlsDisabled} icon={HandIcon} label="Mão esquerda" meta="left" onClick={() => onHandChange("left")} />
             <ChoiceButton active={hand === "right"} disabled={controlsDisabled} icon={HandIcon} label="Mão direita" meta="right" onClick={() => onHandChange("right")} />
+            <div className="rounded-lg bg-[rgba(239,239,239,0.06)] p-4 sm:col-span-2">
+              <div className="flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <p className="form-label">Tempo de jogo</p>
+                  <p className="mt-1 text-sm font-semibold text-[color:var(--platinum)] tabular-nums">
+                    {displayedDurationMinutes} min
+                  </p>
+                </div>
+                <span className="metric-icon-chip">
+                  <Clock3 aria-hidden className="h-5 w-5" />
+                </span>
+              </div>
+              <div className="mt-4 grid grid-cols-5 gap-2">
+                {SESSION_DURATION_OPTIONS_MINUTES.map((minutes) => (
+                  <button
+                    aria-pressed={sessionDurationMinutes === minutes}
+                    className={classNames("time-mode-button", sessionDurationMinutes === minutes && "active")}
+                    disabled={controlsDisabled}
+                    key={minutes}
+                    type="button"
+                    onClick={() => onDurationMinutesChange(minutes)}
+                  >
+                    {minutes}
+                  </button>
+                ))}
+              </div>
+            </div>
           </div>
 
           <aside className="start-panel">
@@ -2397,6 +2630,7 @@ function GameScreen({
   apiError,
   elapsedSeconds,
   feedbacks,
+  finishedSummary,
   hand,
   latencyDiagnostics,
   musicMuted,
@@ -2407,9 +2641,11 @@ function GameScreen({
   pressedLanes,
   pressureActive,
   pressureValue,
+  sessionEndNoticeVisible,
   sessionWarmupRemainingMs,
   stats,
   onFinish,
+  onFinishSummary,
   onMusicMutedChange,
   onStreakSound,
   onKeyboardInputChange,
@@ -2420,6 +2656,7 @@ function GameScreen({
   apiError: string | null;
   elapsedSeconds: number;
   feedbacks: Feedback[];
+  finishedSummary: FinishedGameSummary | null;
   hand: Hand;
   latencyDiagnostics: RealtimeLatencyDiagnostics;
   musicMuted: boolean;
@@ -2430,9 +2667,11 @@ function GameScreen({
   pressedLanes: Record<number, boolean>;
   pressureActive: boolean;
   pressureValue: number | null;
+  sessionEndNoticeVisible: boolean;
   sessionWarmupRemainingMs: number;
   stats: ScoreStats;
   onFinish: () => void;
+  onFinishSummary: () => void;
   onMusicMutedChange: (muted: boolean) => void;
   onStreakSound: (type: "upgradeStreak" | "lossStreak") => void;
   onKeyboardInputChange: (enabled: boolean) => void;
@@ -2551,6 +2790,7 @@ function GameScreen({
             <button
               aria-pressed={keyboardInputActive}
               className={classNames("keyboard-toggle", keyboardInputActive && "active")}
+              disabled={Boolean(finishedSummary)}
               type="button"
               onClick={() => onKeyboardInputChange(!keyboardInputActive)}
             >
@@ -2573,13 +2813,13 @@ function GameScreen({
               Seq {latencyDiagnostics.lastSequence ?? "--"}
             </span>
             <button
-              className="finish-game-button"
-              disabled={apiBusy}
+              className={classNames("finish-game-button", sessionEndNoticeVisible && "ended")}
+              disabled={apiBusy || sessionEndNoticeVisible || Boolean(finishedSummary)}
               type="button"
               onClick={onFinish}
             >
               <X aria-hidden className="h-4 w-4" />
-              Finalizar
+              {sessionEndNoticeVisible ? "Finalizada" : "Finalizar"}
             </button>
           </div>
         </div>
@@ -2777,6 +3017,19 @@ function GameScreen({
           </div>
         </div>
 
+        {sessionEndNoticeVisible && !finishedSummary ? (
+          <div className="session-ended-message" role="status">
+            Sessão finalizada
+          </div>
+        ) : null}
+
+        {finishedSummary ? (
+          <GameSummaryOverlay
+            summary={finishedSummary}
+            onClose={onFinishSummary}
+          />
+        ) : null}
+
         {apiError ? (
           <div className="absolute bottom-3 right-3 z-40 rounded-lg bg-[rgba(143,57,133,0.14)] px-3 py-2 text-sm font-semibold text-white shadow-sm">
             {formatApiError(apiError)}
@@ -2795,6 +3048,258 @@ function EmptyState({ actionLabel, message, onAction }: { actionLabel: string; m
         {actionLabel}
       </button>
     </section>
+  );
+}
+
+function ChartFrame({ children, title }: { children: React.ReactNode; title: string }) {
+  return (
+    <div className="subtle-panel chart-panel p-5">
+      <h3 className="flex items-center gap-2 text-lg font-extrabold text-[color:var(--platinum)]">
+        <BarChart3 aria-hidden className="h-5 w-5 text-[color:var(--dark-goldenrod)]" />
+        {title}
+      </h3>
+      <div className="mt-4 h-72">
+        {children}
+      </div>
+    </div>
+  );
+}
+
+function EmptyChart({ label }: { label: string }) {
+  return (
+    <div className="flex h-full items-center justify-center text-sm font-semibold text-[color:var(--muted)]">
+      {label}
+    </div>
+  );
+}
+
+const CHART_AXIS_STYLE = { fill: "rgba(239,239,239,0.66)", fontSize: 12, fontWeight: 800 };
+const CHART_GRID_COLOR = "rgba(239,239,239,0.12)";
+const CHART_TOOLTIP_STYLE = {
+  background: "rgba(20, 27, 50, 0.96)",
+  border: "1px solid rgba(239,239,239,0.18)",
+  borderRadius: 8,
+  color: "rgba(239,239,239,1)",
+};
+
+function SessionPerformanceChart({ data }: { data: ReturnType<typeof sessionPerformanceData> }) {
+  return (
+    <ChartFrame title="Desempenho por sessão">
+      {data.length === 0 ? (
+        <EmptyChart label="Sem sessões finalizadas ainda." />
+      ) : (
+        <ResponsiveContainer height="100%" width="100%">
+          <LineChart data={data} margin={{ bottom: 4, left: -18, right: 8, top: 8 }}>
+            <CartesianGrid stroke={CHART_GRID_COLOR} strokeDasharray="3 3" />
+            <XAxis dataKey="label" tick={CHART_AXIS_STYLE} />
+            <YAxis tick={CHART_AXIS_STYLE} />
+            <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+            <Legend />
+            <Line dataKey="accuracy" name="Acertos %" stroke="#b68f40" strokeWidth={3} type="monotone" />
+            <Line dataKey="errors" name="Erros %" stroke="#ef4444" strokeWidth={2} type="monotone" />
+            <Line dataKey="reaction" name="Reacao ms" stroke="#60a5fa" strokeWidth={2} type="monotone" />
+          </LineChart>
+        </ResponsiveContainer>
+      )}
+    </ChartFrame>
+  );
+}
+
+function DurationPerformanceChart({ data }: { data: ReturnType<typeof groupMetricsByDuration> }) {
+  return (
+    <ChartFrame title="Desempenho por tempo">
+      {data.length === 0 ? (
+        <EmptyChart label="Sem sessoes com tempo definido." />
+      ) : (
+        <ResponsiveContainer height="100%" width="100%">
+          <BarChart data={data} margin={{ bottom: 4, left: -18, right: 8, top: 8 }}>
+            <CartesianGrid stroke={CHART_GRID_COLOR} strokeDasharray="3 3" />
+            <XAxis dataKey="label" tick={CHART_AXIS_STYLE} />
+            <YAxis tick={CHART_AXIS_STYLE} />
+            <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+            <Legend />
+            <Bar dataKey="accuracy" fill="#b68f40" name="Acertos %" radius={[6, 6, 0, 0]} />
+            <Bar dataKey="scorePerMinute" fill="#7f7caf" name="Score/min" radius={[6, 6, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </ChartFrame>
+  );
+}
+
+function HandComparisonChart({ data }: { data: ReturnType<typeof handComparison> }) {
+  const visibleData = data.filter((item) => item.sessions > 0);
+  return (
+    <ChartFrame title="Comparativo por mão">
+      {visibleData.length === 0 ? (
+        <EmptyChart label="Sem sessoes por mão." />
+      ) : (
+        <ResponsiveContainer height="100%" width="100%">
+          <BarChart data={visibleData} margin={{ bottom: 4, left: -18, right: 8, top: 8 }}>
+            <CartesianGrid stroke={CHART_GRID_COLOR} strokeDasharray="3 3" />
+            <XAxis dataKey="label" tick={CHART_AXIS_STYLE} />
+            <YAxis tick={CHART_AXIS_STYLE} />
+            <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+            <Legend />
+            <Bar dataKey="accuracy" fill="#b68f40" name="Acertos %" radius={[6, 6, 0, 0]} />
+            <Bar dataKey="sessions" fill="#60a5fa" name="Sessoes" radius={[6, 6, 0, 0]} />
+          </BarChart>
+        </ResponsiveContainer>
+      )}
+    </ChartFrame>
+  );
+}
+
+function FingerPrecisionChart({
+  data,
+  hand,
+  onHandChange,
+}: {
+  data: ReturnType<typeof averageLanePrecision>;
+  hand: HandFilter;
+  onHandChange: (hand: HandFilter) => void;
+}) {
+  const visibleData = data.filter((item) => item.value > 0).map((item) => ({
+    dedo: `D${item.laneId}`,
+    precisao: item.value,
+  }));
+
+  return (
+    <div className="subtle-panel chart-panel p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <h3 className="flex items-center gap-2 text-lg font-extrabold text-[color:var(--platinum)]">
+          <HandIcon aria-hidden className="h-5 w-5 text-[color:var(--dark-goldenrod)]" />
+          Precisao por dedo
+        </h3>
+        <div className="grid grid-cols-2 gap-2">
+          {(["right", "left"] as HandFilter[]).map((value) => (
+            <button
+              aria-pressed={hand === value}
+              className={classNames("time-mode-button min-w-24", hand === value && "active")}
+              key={value}
+              type="button"
+              onClick={() => onHandChange(value)}
+            >
+              {value === "right" ? "Direita" : "Esquerda"}
+            </button>
+          ))}
+        </div>
+      </div>
+      <div className="mt-4 h-72">
+        {visibleData.length === 0 ? (
+          <EmptyChart label="Sem precisao agregada." />
+        ) : (
+          <ResponsiveContainer height="100%" width="100%">
+            <BarChart data={visibleData} margin={{ bottom: 4, left: -18, right: 8, top: 8 }}>
+              <CartesianGrid stroke={CHART_GRID_COLOR} strokeDasharray="3 3" />
+              <XAxis dataKey="dedo" tick={CHART_AXIS_STYLE} />
+              <YAxis domain={[0, 100]} tick={CHART_AXIS_STYLE} />
+              <Tooltip contentStyle={CHART_TOOLTIP_STYLE} />
+              <Bar dataKey="precisao" fill="#b68f40" name="Precisao %" radius={[6, 6, 0, 0]} />
+            </BarChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function GameSummaryOverlay({
+  onClose,
+  summary,
+}: {
+  onClose: () => void;
+  summary: FinishedGameSummary;
+}) {
+  const laneData = [1, 2, 3, 4].map((laneId) => ({
+    color: LANES[laneId].color,
+    label: `${laneId}`,
+    value: summary.metrics.precision_by_lane[String(laneId)] ?? 0,
+  }));
+
+  return (
+    <div className="game-summary-overlay">
+      <section className="game-summary-panel">
+        <div className="flex flex-wrap items-start justify-between gap-4">
+          <div>
+            <p className="brand-eyebrow">Sessão finalizada</p>
+            <h2 className="mt-2 text-3xl font-extrabold text-white">Resumo da jogada</h2>
+            <p className="mt-2 text-sm font-semibold text-[color:var(--muted)]">
+              {modeLabel(summary.mode)} | mão {handLabel(summary.hand)} | {formatElapsed(summary.durationSeconds)}
+            </p>
+          </div>
+        </div>
+
+        <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <CompactStat label="Score" value={summary.metrics.score.toLocaleString("pt-BR")} />
+          <CompactStat label="Acertos" value={formatPercent(summary.metrics.accuracy_rate)} />
+          <CompactStat label="Erros" value={formatPercent(summary.metrics.error_rate)} />
+          <CompactStat label="Perdidos" value={formatPercent(summary.metrics.missed_rate)} />
+          <CompactStat label="Reacao media" value={formatMs(summary.metrics.avg_reaction_ms)} />
+          <CompactStat label="Melhor reacao" value={formatMs(summary.metrics.best_reaction_ms)} />
+          <CompactStat label="Combo maximo" value={String(summary.metrics.max_combo)} />
+          <CompactStat label="Estimulos" value={String(summary.metrics.total_stimuli)} />
+        </div>
+
+        <div className="mt-6 subtle-panel p-4">
+          <h3 className="text-sm font-extrabold uppercase text-[color:var(--muted)]">Precisao por dedo</h3>
+          <div className="mt-4">
+            <MiniBarChart
+              data={laneData}
+              emptyLabel="Sem dados de precisao nesta jogada."
+              maxValue={100}
+              suffix="%"
+            />
+          </div>
+        </div>
+
+        <button className="primary-button mt-6 w-full" type="button" onClick={onClose}>
+          Ir para o dashboard
+        </button>
+      </section>
+    </div>
+  );
+}
+
+function MiniBarChart({
+  data,
+  emptyLabel,
+  maxValue,
+  suffix = "",
+}: {
+  data: Array<{ color: string; label: string; value: number }>;
+  emptyLabel: string;
+  maxValue?: number;
+  suffix?: string;
+}) {
+  const visibleData = data.filter((item) => item.value > 0);
+  const peak = maxValue ?? Math.max(1, ...visibleData.map((item) => item.value));
+
+  if (visibleData.length === 0) {
+    return <p className="text-sm font-semibold text-[color:var(--muted)]">{emptyLabel}</p>;
+  }
+
+  return (
+    <div className="mini-chart">
+      {visibleData.map((item) => {
+        const width = Math.max(6, Math.min(100, (item.value / peak) * 100));
+        return (
+          <div className="mini-chart-row" key={item.label}>
+            <span className="mini-chart-label">{item.label}</span>
+            <div className="mini-chart-track">
+              <span
+                className="mini-chart-bar"
+                style={{ "--bar-color": item.color, "--bar-width": `${width}%` } as CSSProperties}
+              />
+            </div>
+            <span className="mini-chart-value">
+              {suffix.includes("ms") ? Math.round(item.value) : Number(item.value.toFixed(1)).toLocaleString("pt-BR")}
+              {suffix}
+            </span>
+          </div>
+        );
+      })}
+    </div>
   );
 }
 

@@ -44,6 +44,7 @@ export interface GameSessionCreate {
   user_id: string;
   hand: Hand;
   mode: GameMode;
+  duration_seconds?: number;
 }
 
 export interface GameplayMetricsPayload {

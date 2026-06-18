@@ -65,6 +65,7 @@ static const uint16_t MQTT_BUFFER_SIZE_BYTES = MQTT_MAX_PACKET_SIZE;
 static const uint32_t BUTTON_DEBOUNCE_MS = 50;
 static const uint32_t BUTTON_SCAN_INTERVAL_MS = 10;
 static const uint32_t PRESSURE_SAMPLE_INTERVAL_MS = 100;
+static const uint32_t PRESSURE_SERIAL_PRINT_INTERVAL_MS = 500;
 static const uint32_t MQTT_LOOP_INTERVAL_MS = 10;
 static const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 2;
 static const uint32_t MQTT_TCP_CONNECT_TIMEOUT_MS = 2000;
@@ -214,6 +215,7 @@ static SessionState currentSession = {
 static uint32_t pressureTimeoutCount = 0;
 static uint32_t buttonSequence = 0;
 static uint32_t pressureSequence = 0;
+static uint32_t lastPressureSerialPrintMs = 0;
 static uint32_t lastButtonBatchPublishLatencyUs = 0;
 static uint32_t lastPressureBatchPublishLatencyUs = 0;
 static uint32_t lastMqttConnectAttemptMs = 0;
@@ -1565,6 +1567,18 @@ static void taskPressure(void *parameter) {
         PressureRealtimeMessage realtimeMessage = {sample, latestSession};
         xQueueSend(pressureQueue, &realtimeMessage, pdMS_TO_TICKS(20));
         recordPressureForBatch(sample);
+
+        const uint32_t now = millis();
+        if (now - lastPressureSerialPrintMs >= PRESSURE_SERIAL_PRINT_INTERVAL_MS) {
+          lastPressureSerialPrintMs = now;
+          Serial.printf("Pressao raw=%ld delta=%ld baseline=%ld kPa=%.3f calibrado=%s seq=%lu\n",
+                        sample.pressure_raw,
+                        sample.pressure_delta_raw,
+                        sample.pressure_baseline_raw,
+                        static_cast<double>(sample.pressure_kpa),
+                        sample.pressure_calibrated ? "sim" : "nao",
+                        static_cast<unsigned long>(sample.sequence));
+        }
       }
     }
 

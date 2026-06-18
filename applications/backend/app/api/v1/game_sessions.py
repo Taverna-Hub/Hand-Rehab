@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
 from fastapi import APIRouter, Body, Depends, HTTPException, status
@@ -106,15 +106,16 @@ async def _create_running_session(
     device_id = payload.device_id or settings.default_device_id
     await get_or_create_device(session, device_id)
     started_at = payload.started_at or utc_now()
+    scheduled_finish_at = started_at + timedelta(seconds=payload.duration_seconds) if payload.duration_seconds else None
     game_session = GameSession(
         user_id=payload.user_id,
         device_id=device_id,
         hand=payload.hand,
         mode=payload.mode,
-        duration_seconds=None,
+        duration_seconds=payload.duration_seconds,
         status="running",
         started_at=started_at,
-        scheduled_finish_at=None,
+        scheduled_finish_at=scheduled_finish_at,
         notes=payload.notes,
     )
     session.add(game_session)
@@ -131,6 +132,7 @@ async def _create_running_session(
             "user_id": game_session.user_id,
             "hand": game_session.hand,
             "mode": game_session.mode,
+            "duration_seconds": game_session.duration_seconds,
         },
     )
     return game_session

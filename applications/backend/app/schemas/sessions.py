@@ -24,6 +24,7 @@ class GameSessionCreate(BaseModel):
     device_id: str | None = Field(default=None, min_length=1, max_length=80)
     hand: Hand
     mode: Mode
+    duration_seconds: int | None = Field(default=None, ge=60, le=600)
     started_at: datetime | None = None
     notes: str | None = None
 
