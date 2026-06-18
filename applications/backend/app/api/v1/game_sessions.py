@@ -14,6 +14,11 @@ from app.core.config import Settings, get_settings
 from app.models import Device, GameSession, GameplayMetrics, User
 from app.schemas.sessions import GameSessionCreate, GameSessionFinish, GameSessionRead, GameplayMetricsPayload
 from app.services.mqtt import MqttCommandPublisher, get_mqtt_publisher
+from app.services.notifications import (
+    SessionFinishNotifier,
+    get_session_finish_notifier,
+    notify_session_finished_best_effort,
+)
 
 router = APIRouter(prefix="/game-sessions", tags=["game-sessions"])
 
@@ -227,6 +232,7 @@ async def finish_game_session(
     payload: GameSessionFinish = Body(default_factory=GameSessionFinish),
     session: AsyncSession = Depends(get_session),
     publisher: MqttCommandPublisher = Depends(get_mqtt_publisher),
+    notifier: SessionFinishNotifier = Depends(get_session_finish_notifier),
 ) -> GameSession:
     game_session = await session.get(GameSession, session_id)
     if game_session is None:
@@ -245,6 +251,9 @@ async def finish_game_session(
 
     await session.commit()
     await session.refresh(game_session)
+    user = await session.get(User, game_session.user_id)
+    metrics_result = await session.execute(select(GameplayMetrics).where(GameplayMetrics.session_id == game_session.id))
+    metrics = metrics_result.scalar_one_or_none()
     await publisher.publish_end_session(
         game_session.device_id,
         {
@@ -255,4 +264,6 @@ async def finish_game_session(
             "mode": game_session.mode,
         },
     )
+    if user is not None:
+        await notify_session_finished_best_effort(notifier, game_session, user, metrics)
     return game_session

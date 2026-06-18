@@ -12,6 +12,9 @@ class Settings(BaseSettings):
     mqtt_host: str = "node-red"
     mqtt_port: int = 1883
     default_device_id: str = "esp32-001"
+    telegram_bot_token: str | None = None
+    telegram_chat_id: str | None = None
+    telegram_api_base_url: str = "https://api.telegram.org"
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
