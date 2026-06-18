@@ -66,9 +66,11 @@ static const uint32_t BUTTON_DEBOUNCE_MS = 50;
 static const uint32_t BUTTON_SCAN_INTERVAL_MS = 10;
 static const uint32_t PRESSURE_SAMPLE_INTERVAL_MS = 100;
 static const uint32_t MQTT_LOOP_INTERVAL_MS = 10;
-static const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 10;
+static const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 2;
+static const uint32_t MQTT_TCP_CONNECT_TIMEOUT_MS = 2000;
 static const uint16_t MQTT_KEEP_ALIVE_SECONDS = 15;
 static const uint32_t MQTT_RECONNECT_INTERVAL_MS = 2000;
+static const size_t MQTT_QUEUE_DRAIN_LIMIT = 4;
 static const uint32_t BATCH_PUBLISH_INTERVAL_MS = 5000;
 static const uint32_t STATUS_LED_BLINK_INTERVAL_MS = 500;
 static const uint32_t STATUS_LED_IDLE_POLL_INTERVAL_MS = 100;
@@ -1137,6 +1139,18 @@ static void connectMqtt() {
 
   Serial.print("Conectando ao MQTT...");
   const uint32_t startedAt = millis();
+  wifiClient.stop();
+  if (!wifiClient.connect(APP_MQTT_HOST, APP_MQTT_PORT, MQTT_TCP_CONNECT_TIMEOUT_MS)) {
+    xEventGroupClearBits(systemEvents, MQTT_CONNECTED_BIT);
+    Serial.print("falha TCP em ");
+    Serial.print(millis() - startedAt);
+    Serial.println(" ms");
+    wifiClient.stop();
+    return;
+  }
+
+  vTaskDelay(pdMS_TO_TICKS(1));
+
   if (mqttClient.connect(APP_DEVICE_ID, statusTopic, 1, true, willPayload)) {
     Serial.print("conectado em ");
     Serial.print(millis() - startedAt);
@@ -1151,7 +1165,6 @@ static void connectMqtt() {
     Serial.print(millis() - startedAt);
     Serial.print(" ms, rc=");
     Serial.println(mqttClient.state());
-    mqttClient.disconnect();
     wifiClient.stop();
   }
 }
@@ -1420,12 +1433,18 @@ static void taskMqtt(void *parameter) {
       xSemaphoreGiveRecursive(mqttMutex);
     }
 
-    while (xQueueReceive(mqttCriticalPublishQueue, &message, 0) == pdTRUE) {
+    size_t drained = 0;
+    while (drained < MQTT_QUEUE_DRAIN_LIMIT && xQueueReceive(mqttCriticalPublishQueue, &message, 0) == pdTRUE) {
       publishMqttNow(message.topic, message.payload, message.retained);
+      drained++;
+      vTaskDelay(pdMS_TO_TICKS(1));
     }
 
-    while (xQueueReceive(mqttPublishQueue, &message, 0) == pdTRUE) {
+    drained = 0;
+    while (drained < MQTT_QUEUE_DRAIN_LIMIT && xQueueReceive(mqttPublishQueue, &message, 0) == pdTRUE) {
       publishMqttNow(message.topic, message.payload, message.retained);
+      drained++;
+      vTaskDelay(pdMS_TO_TICKS(1));
     }
 
     vTaskDelay(pdMS_TO_TICKS(MQTT_LOOP_INTERVAL_MS));
@@ -1706,6 +1725,9 @@ static void setupFreeRtos() {
   mqttClient.setKeepAlive(MQTT_KEEP_ALIVE_SECONDS);
   mqttClient.setCallback(mqttCallback);
   Serial.printf("MQTT buffer configurado: %u bytes\n", mqttClient.getBufferSize());
+  Serial.printf("Heap livre antes das tasks: %lu bytes | minimo: %lu bytes\n",
+                static_cast<unsigned long>(ESP.getFreeHeap()),
+                static_cast<unsigned long>(ESP.getMinFreeHeap()));
 
   xTaskCreatePinnedToCore(taskMqtt, "mqtt", MQTT_TASK_STACK, nullptr, 3, nullptr, 0);
   xTaskCreatePinnedToCore(taskButtons, "buttons", BUTTON_TASK_STACK, nullptr, 2, nullptr, 1);
