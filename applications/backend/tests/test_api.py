@@ -148,6 +148,7 @@ async def test_start_publishes_mqtt_command(client, mqtt_publisher):
                 "user_id": user["id"],
                 "hand": "right",
                 "mode": "buttons",
+                "duration_seconds": None,
             },
         }
     ]
