@@ -64,9 +64,13 @@ const REALTIME_JITTER_GRACE_MS = 30;
 const REALTIME_CLOCK_SAMPLE_LIMIT = 20;
 const NOTE_FADE_MS = 650;
 const FEEDBACK_LIFETIME_MS = 1_250;
-const PRESSURE_HIT_KPA = 0.5;
+const FALLBACK_PRESSURE_HIT_KPA = 0.5;
+const DEFAULT_PRESSURE_HIT_DELTA_RAW = 700;
+const DEFAULT_PRESSURE_RELEASE_DELTA_RAW = 350;
+const PRESSURE_CALIBRATION_TIMEOUT_MS = 12_000;
 const HOLD_NOTE_DURATION_MS = BEAT_INTERVAL_MS * 2;
 const SESSION_START_COUNTDOWN_MS = 3_000;
+const SESSION_START_ACK_TIMEOUT_MS = 8_000;
 
 const FOUR_LANE_PATTERN = [1, 2, 3, 4, 2, 4, 1, 3, 1, 4, 2, 3];
 
@@ -144,6 +148,14 @@ type CalibrationPhase = "idle" | "pending" | "queued" | "running" | "completed" 
 interface CalibrationState {
   phase: CalibrationPhase;
   message: string;
+}
+
+interface PressureCalibration {
+  baselineRaw: number | null;
+  calibratedAt: number | null;
+  hitThresholdRaw: number;
+  noiseRaw: number | null;
+  releaseThresholdRaw: number;
 }
 
 type LaneCooldowns = Record<number, number>;
@@ -294,6 +306,16 @@ function isPressureEvent(event: RealtimeEvent): event is RealtimePressureEvent {
 
 function isSessionEvent(event: RealtimeEvent): event is RealtimeSessionEvent {
   return event.realtime_type === "session" || (!isButtonEvent(event) && !isPressureEvent(event));
+}
+
+function sessionEventMatchesGameSession(event: RealtimeSessionEvent, session: GameSessionRead) {
+  return (
+    event.device_id === session.device_id &&
+    event.session_id === session.id &&
+    event.user_id === session.user_id &&
+    event.hand === session.hand &&
+    event.mode === session.mode
+  );
 }
 
 function realtimeSequence(event: RealtimeEvent) {
@@ -474,6 +496,37 @@ function standardDeviation(values: number[]) {
   return Math.sqrt(variance);
 }
 
+function pressureInputFromEvent(event: RealtimePressureEvent, wasActive: boolean, calibration: PressureCalibration) {
+  const eventIsCalibrated = event.pressure_calibrated === true;
+  const eventDeltaRaw = eventIsCalibrated ? numberOrNull(event.pressure_delta_raw) : null;
+  const eventBaselineRaw = eventIsCalibrated ? numberOrNull(event.pressure_baseline_raw) : null;
+  const localDeltaRaw = calibration.baselineRaw === null ? null : event.pressure_raw - calibration.baselineRaw;
+  const eventBaselineDeltaRaw = eventBaselineRaw === null ? null : event.pressure_raw - eventBaselineRaw;
+  const rawDelta = eventDeltaRaw ?? eventBaselineDeltaRaw ?? localDeltaRaw;
+
+  if (rawDelta !== null) {
+    const deltaRaw = Math.max(0, rawDelta);
+    const eventHitThresholdRaw = eventIsCalibrated ? numberOrNull(event.pressure_hit_threshold_raw) : null;
+    const eventReleaseThresholdRaw = eventIsCalibrated ? numberOrNull(event.pressure_release_threshold_raw) : null;
+    const hitThresholdRaw = Math.max(1, Math.round(eventHitThresholdRaw ?? calibration.hitThresholdRaw));
+    const releaseThresholdRaw = Math.min(
+      hitThresholdRaw,
+      Math.max(1, Math.round(eventReleaseThresholdRaw ?? calibration.releaseThresholdRaw)),
+    );
+    const thresholdRaw = wasActive ? releaseThresholdRaw : hitThresholdRaw;
+    return {
+      active: deltaRaw >= thresholdRaw,
+      displayValue: deltaRaw,
+    };
+  }
+
+  const pressureKpa = numberOrNull(event.pressure_kpa);
+  return {
+    active: pressureKpa !== null && pressureKpa >= FALLBACK_PRESSURE_HIT_KPA,
+    displayValue: pressureKpa,
+  };
+}
+
 function formatDateTime(value: string | null | undefined) {
   if (!value) {
     return "--";
@@ -493,15 +546,99 @@ function formatApiError(value: string) {
   if (value === "active_session_exists") {
     return "Finalize o jogo ativo antes de continuar.";
   }
+  if (value === "esp32_start_ack_timeout") {
+    return "A ESP32 não confirmou o início da sessão. Tente iniciar novamente.";
+  }
   return value;
+}
+
+function initialPressureCalibration(): PressureCalibration {
+  return {
+    baselineRaw: null,
+    calibratedAt: null,
+    hitThresholdRaw: DEFAULT_PRESSURE_HIT_DELTA_RAW,
+    noiseRaw: null,
+    releaseThresholdRaw: DEFAULT_PRESSURE_RELEASE_DELTA_RAW,
+  };
+}
+
+function numberOrNull(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function pressureCalibrationFromSessionEvent(event: RealtimeSessionEvent): PressureCalibration | null {
+  const baselineRaw = numberOrNull(event.pressure_baseline_raw);
+  if (baselineRaw === null) {
+    return null;
+  }
+
+  const hitThresholdRaw = Math.max(
+    1,
+    Math.round(numberOrNull(event.pressure_hit_threshold_raw) ?? DEFAULT_PRESSURE_HIT_DELTA_RAW),
+  );
+  const releaseThresholdRaw = Math.max(
+    1,
+    Math.round(numberOrNull(event.pressure_release_threshold_raw) ?? Math.max(DEFAULT_PRESSURE_RELEASE_DELTA_RAW, hitThresholdRaw / 2)),
+  );
+
+  return {
+    baselineRaw,
+    calibratedAt: Date.now(),
+    hitThresholdRaw,
+    noiseRaw: numberOrNull(event.pressure_noise_raw),
+    releaseThresholdRaw: Math.min(releaseThresholdRaw, hitThresholdRaw),
+  };
+}
+
+function pressureCalibrationFromPressureEvent(event: RealtimePressureEvent, current: PressureCalibration): PressureCalibration | null {
+  if (event.pressure_calibrated !== true) {
+    return null;
+  }
+
+  const baselineRaw = numberOrNull(event.pressure_baseline_raw);
+  if (baselineRaw === null) {
+    return null;
+  }
+
+  const hitThresholdRaw = Math.max(
+    1,
+    Math.round(numberOrNull(event.pressure_hit_threshold_raw) ?? current.hitThresholdRaw),
+  );
+  const releaseThresholdRaw = Math.max(
+    1,
+    Math.round(numberOrNull(event.pressure_release_threshold_raw) ?? current.releaseThresholdRaw),
+  );
+
+  return {
+    baselineRaw,
+    calibratedAt: current.calibratedAt ?? Date.now(),
+    hitThresholdRaw,
+    noiseRaw: current.noiseRaw,
+    releaseThresholdRaw: Math.min(releaseThresholdRaw, hitThresholdRaw),
+  };
+}
+
+function pressureCalibrationChanged(previous: PressureCalibration, next: PressureCalibration) {
+  return (
+    previous.baselineRaw !== next.baselineRaw ||
+    previous.hitThresholdRaw !== next.hitThresholdRaw ||
+    previous.noiseRaw !== next.noiseRaw ||
+    previous.releaseThresholdRaw !== next.releaseThresholdRaw
+  );
 }
 
 function calibrationStateFromSessionEvent(event: RealtimeSessionEvent): CalibrationState | null {
   switch (event.status) {
     case "calibration_started":
       return { message: "Calibração em andamento. Mantenha o sensor sem pressão.", phase: "running" };
-    case "calibration_completed":
+    case "calibration_completed": {
+      const baseline = numberOrNull(event.pressure_baseline_raw);
+      const threshold = numberOrNull(event.pressure_hit_threshold_raw);
+      if (baseline !== null && threshold !== null) {
+        return { message: `Calibração concluída. Base raw ${Math.round(baseline)} | pico +${Math.round(threshold)}.`, phase: "completed" };
+      }
       return { message: "Calibração concluída.", phase: "completed" };
+    }
     case "calibration_failed":
       return { message: "Falha na calibração. Verifique o sensor e tente novamente.", phase: "failed" };
     case "calibration_rejected":
@@ -563,6 +700,7 @@ export default function App() {
   const [uiMode, setUiMode] = useState<UiMode>("four");
   const [hand, setHand] = useState<Hand>("right");
   const [activeSession, setActiveSession] = useState<GameSessionRead | null>(null);
+  const [pendingSession, setPendingSession] = useState<GameSessionRead | null>(null);
   const [notes, setNotes] = useState<ActiveNote[]>([]);
   const [stats, setStats] = useState<ScoreStats>(initialStats);
   const [dashboardMetrics, setDashboardMetrics] = useState<GameplayMetricsRead[]>([]);
@@ -578,6 +716,7 @@ export default function App() {
   const [feedbacks, setFeedbacks] = useState<Feedback[]>([]);
   const [sessionSignal, setSessionSignal] = useState("aguardando");
   const [calibrationState, setCalibrationState] = useState<CalibrationState>({ message: "Pronta para calibrar.", phase: "idle" });
+  const [pressureCalibration, setPressureCalibration] = useState<PressureCalibration>(() => initialPressureCalibration());
   const [connectionStatus, setConnectionStatus] = useState<RealtimeConnectionStatus>("connecting");
   const [latencyDiagnostics, setLatencyDiagnostics] = useState<RealtimeLatencyDiagnostics>(() => ({
     inputCompensationMs: realtimeInputLatencyCompensationMs(),
@@ -592,11 +731,13 @@ export default function App() {
   const [apiError, setApiError] = useState<string | null>(null);
 
   const activeSessionRef = useRef<GameSessionRead | null>(null);
+  const pendingSessionRef = useRef<GameSessionRead | null>(null);
   const notesRef = useRef<ActiveNote[]>([]);
   const statsRef = useRef<ScoreStats>(stats);
   const pressedLanesRef = useRef<Record<number, boolean>>({});
   const pressureActiveRef = useRef(false);
   const pressureAboveThresholdRef = useRef(false);
+  const pressureCalibrationRef = useRef<PressureCalibration>(pressureCalibration);
   const localGameStartRef = useRef<number | null>(null);
   const nextBeatIndexRef = useRef(0);
   const noteLaneCooldownsRef = useRef<LaneCooldowns>({});
@@ -604,6 +745,7 @@ export default function App() {
   const realtimeClockOffsetsRef = useRef<number[]>([]);
   const realtimeInputCompensationMsRef = useRef(realtimeInputLatencyCompensationMs());
   const realtimeLastSequenceRef = useRef<Record<string, number>>({});
+  const realtimeSessionStartedRef = useRef<Record<string, RealtimeSessionEvent>>({});
   const realtimeTransportDelaysRef = useRef<number[]>([]);
   const sessionWarmupUntilMsRef = useRef<number | null>(null);
   const gameMusicRef = useRef<HTMLAudioElement | null>(null);
@@ -712,6 +854,10 @@ export default function App() {
   }, [activeSession]);
 
   useEffect(() => {
+    pendingSessionRef.current = pendingSession;
+  }, [pendingSession]);
+
+  useEffect(() => {
     if (route.name === "play" && activeSession) {
       void startGameMusic();
       return;
@@ -739,8 +885,58 @@ export default function App() {
   }, [pressureActive]);
 
   useEffect(() => {
+    pressureCalibrationRef.current = pressureCalibration;
+  }, [pressureCalibration]);
+
+  useEffect(() => {
     sessionWarmupUntilMsRef.current = sessionWarmupUntilMs;
   }, [sessionWarmupUntilMs]);
+
+  useEffect(() => {
+    if (!["pending", "queued", "running"].includes(calibrationState.phase)) {
+      return;
+    }
+
+    const phase = calibrationState.phase;
+    const timeout = window.setTimeout(() => {
+      setCalibrationState((current) =>
+        current.phase === phase
+          ? { message: "Tempo esgotado aguardando confirmação da ESP32.", phase: "failed" }
+          : current,
+      );
+    }, PRESSURE_CALIBRATION_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [calibrationState.phase]);
+
+  useEffect(() => {
+    if (!pendingSession) {
+      return;
+    }
+
+    const timeout = window.setTimeout(() => {
+      const currentPending = pendingSessionRef.current;
+      if (!currentPending || currentPending.id !== pendingSession.id) {
+        return;
+      }
+
+      pendingSessionRef.current = null;
+      setPendingSession(null);
+      setSessionSignal("ACK não recebido");
+      setApiError("esp32_start_ack_timeout");
+      setApiBusy(true);
+
+      void finishGameSession(currentPending.id, { notes: "start_ack_timeout" })
+        .catch((error) => {
+          setApiError(error instanceof Error ? error.message : "erro_ao_cancelar_inicio");
+        })
+        .finally(() => {
+          setApiBusy(false);
+        });
+    }, SESSION_START_ACK_TIMEOUT_MS);
+
+    return () => window.clearTimeout(timeout);
+  }, [pendingSession]);
 
   const pushFeedback = useCallback((label: string, tone: FeedbackTone, laneId = 1) => {
     feedbackIdRef.current += 1;
@@ -831,6 +1027,9 @@ export default function App() {
 
   const applyActiveSession = useCallback(
     (session: GameSessionRead) => {
+      pendingSessionRef.current = null;
+      setPendingSession(null);
+      activeSessionRef.current = session;
       setActiveSession(session);
       setUiMode(gameModeToUiMode(session.mode));
       setHand(session.hand);
@@ -840,6 +1039,15 @@ export default function App() {
       setSessionWarmupUntilMs(performance.now() + SESSION_START_COUNTDOWN_MS);
     },
     [resetLocalGame],
+  );
+
+  const completePendingSessionStart = useCallback(
+    (session: GameSessionRead) => {
+      applyActiveSession(session);
+      setApiError(null);
+      pushFeedback("Vai", "neutral");
+    },
+    [applyActiveSession, pushFeedback],
   );
 
   const refreshUsers = useCallback(async () => {
@@ -1009,6 +1217,23 @@ export default function App() {
         if (nextCalibrationState) {
           setCalibrationState(nextCalibrationState);
         }
+        if (event.status === "calibration_completed") {
+          const nextPressureCalibration = pressureCalibrationFromSessionEvent(event);
+          if (nextPressureCalibration) {
+            setPressureCalibration(nextPressureCalibration);
+          }
+        }
+        if (event.event_type === "session_started" && event.session_id) {
+          realtimeSessionStartedRef.current = {
+            ...realtimeSessionStartedRef.current,
+            [event.session_id]: event,
+          };
+
+          const pending = pendingSessionRef.current;
+          if (pending && sessionEventMatchesGameSession(event, pending)) {
+            completePendingSessionStart(pending);
+          }
+        }
         return;
       }
 
@@ -1044,14 +1269,20 @@ export default function App() {
       }
 
       if (isPressureEvent(event)) {
-        const pressureKpa = typeof event.pressure_kpa === "number" ? event.pressure_kpa : null;
-        setPressureValue(pressureKpa);
-
-        if (pressureKpa === null) {
-          return;
+        let effectivePressureCalibration = pressureCalibrationRef.current;
+        const eventPressureCalibration = pressureCalibrationFromPressureEvent(event, effectivePressureCalibration);
+        if (eventPressureCalibration !== null) {
+          effectivePressureCalibration = eventPressureCalibration;
+          if (pressureCalibrationChanged(pressureCalibrationRef.current, eventPressureCalibration)) {
+            pressureCalibrationRef.current = eventPressureCalibration;
+            setPressureCalibration(eventPressureCalibration);
+          }
         }
 
-        const isAboveThreshold = pressureKpa >= PRESSURE_HIT_KPA;
+        const pressureInput = pressureInputFromEvent(event, pressureAboveThresholdRef.current, effectivePressureCalibration);
+        setPressureValue(pressureInput.displayValue);
+
+        const isAboveThreshold = pressureInput.active;
         setPressureActive(isAboveThreshold);
         if (isWarmingUp) {
           pressureAboveThresholdRef.current = isAboveThreshold;
@@ -1065,7 +1296,14 @@ export default function App() {
         pressureAboveThresholdRef.current = isAboveThreshold;
       }
     },
-    [getCorrectedRealtimeInputTime, isStaleRealtimeSequence, recordRealtimeInput, registerHit, releaseHold],
+    [
+      completePendingSessionStart,
+      getCorrectedRealtimeInputTime,
+      isStaleRealtimeSequence,
+      recordRealtimeInput,
+      registerHit,
+      releaseHold,
+    ],
   );
 
   useEffect(() => {
@@ -1115,7 +1353,7 @@ export default function App() {
         }
         event.preventDefault();
         setPressureActive(true);
-        setPressureValue(PRESSURE_HIT_KPA);
+        setPressureValue(pressureCalibrationRef.current.hitThresholdRaw);
         if (isWarmingUp) {
           return;
         }
@@ -1322,17 +1560,25 @@ export default function App() {
         mode: uiModeToGameMode(uiMode),
         user_id: currentUserId,
       });
-      applyActiveSession(session);
+
+      const alreadyAcknowledged = realtimeSessionStartedRef.current[session.id];
+      if (alreadyAcknowledged && sessionEventMatchesGameSession(alreadyAcknowledged, session)) {
+        completePendingSessionStart(session);
+      } else {
+        pendingSessionRef.current = session;
+        setPendingSession(session);
+        setSelectedUserId(session.user_id);
+        setSessionSignal("aguardando ACK da ESP32");
+        resetLocalGame();
+      }
+
       navigate({ name: "play", userId: session.user_id });
-      void startGameMusic();
-      pushFeedback("Vai", "neutral");
     } catch (error) {
       if (error instanceof Error && error.message === "active_session_exists") {
         const sessions = await listActiveSessions();
         if (sessions[0]) {
           applyActiveSession(sessions[0]);
           navigate({ name: "play", userId: sessions[0].user_id });
-          void startGameMusic();
         }
       } else {
         setApiError(error instanceof Error ? error.message : "erro_ao_iniciar");
@@ -1383,7 +1629,10 @@ export default function App() {
         setMetricsError(null);
       }
       stopGameMusic();
+      activeSessionRef.current = null;
+      pendingSessionRef.current = null;
       setActiveSession(null);
+      setPendingSession(null);
       setSessionSignal("finalizada");
       resetLocalGame();
       pushFeedback("Fim", "neutral");
@@ -1428,8 +1677,11 @@ export default function App() {
             activeSession={activeSession}
             apiBusy={apiBusy}
             calibrationState={calibrationState}
+            connectionStatus={connectionStatus}
             hand={hand}
             patient={selectedUser}
+            pendingSession={pendingSession}
+            sessionSignal={sessionSignal}
             uiMode={uiMode}
             onBack={() => navigate({ name: "patient", userId: selectedUser.id })}
             onCalibrate={handleCalibratePressure}
@@ -1976,8 +2228,11 @@ function GameSetup({
   activeSession,
   apiBusy,
   calibrationState,
+  connectionStatus,
   hand,
   patient,
+  pendingSession,
+  sessionSignal,
   uiMode,
   onBack,
   onCalibrate,
@@ -1988,8 +2243,11 @@ function GameSetup({
   activeSession: GameSessionRead | null;
   apiBusy: boolean;
   calibrationState: CalibrationState;
+  connectionStatus: RealtimeConnectionStatus;
   hand: Hand;
   patient: UserRead;
+  pendingSession: GameSessionRead | null;
+  sessionSignal: string;
   uiMode: UiMode;
   onBack: () => void;
   onCalibrate: () => void;
@@ -1998,8 +2256,13 @@ function GameSetup({
   onUiModeChange: (value: UiMode) => void;
 }) {
   const calibrationBusy = calibrationState.phase === "pending" || calibrationState.phase === "queued" || calibrationState.phase === "running";
-  const controlsDisabled = apiBusy || calibrationBusy;
-  const calibrationDisabled = apiBusy || calibrationBusy || activeSession !== null;
+  const startPending = pendingSession !== null;
+  const controlsDisabled = apiBusy || calibrationBusy || startPending;
+  const calibrationDisabled = apiBusy || calibrationBusy || activeSession !== null || startPending;
+  const displayedUiMode = pendingSession ? gameModeToUiMode(pendingSession.mode) : uiMode;
+  const displayedHand = pendingSession?.hand ?? hand;
+  const websocketOpen = connectionStatus === "open";
+  const startLabel = apiBusy ? "Enviando" : startPending ? "Sincronizando" : "Iniciar jogo";
 
   return (
     <section className="min-h-[calc(100vh-73px)] p-8">
@@ -2021,6 +2284,16 @@ function GameSetup({
             <p className="mt-2 text-sm font-semibold text-[color:var(--platinum)]">
               API {backendApiUrl().replace(/^https?:\/\//, "")}
             </p>
+            <div className="mt-4 flex flex-wrap gap-2">
+              <span className="status-pill">
+                <span className={classNames("status-dot", !websocketOpen && "off")} />
+                WS {connectionStatus}
+              </span>
+              <span className="status-pill">
+                <span className={classNames("status-dot", !startPending && "off")} />
+                {sessionSignal}
+              </span>
+            </div>
           </div>
         </div>
 
@@ -2036,10 +2309,10 @@ function GameSetup({
             <div>
               <p className="flex items-center gap-2 text-xs font-extrabold uppercase text-[rgba(239,239,239,0.68)]">
                 <Gamepad2 aria-hidden className="h-4 w-4 text-[color:var(--dark-goldenrod)]" />
-                Pronto para iniciar
+                {startPending ? "Aguardando ESP32" : "Pronto para iniciar"}
               </p>
             <p className="mt-3 text-sm leading-6 text-[color:var(--muted)]">
-                {uiMode === "single" ? "Modo de pressão" : "Modo de botões"} | mão {handLabel(hand)}
+                {displayedUiMode === "single" ? "Modo de pressão" : "Modo de botões"} | mão {handLabel(displayedHand)}
               </p>
             </div>
             <button
@@ -2049,8 +2322,13 @@ function GameSetup({
               onClick={onStart}
             >
               <Gamepad2 aria-hidden className="h-5 w-5" />
-              Iniciar jogo
+              {startLabel}
             </button>
+            {startPending ? (
+              <p className="text-xs font-semibold leading-5 text-[color:var(--muted)]">
+                Aguardando ACK session_started pelo WebSocket.
+              </p>
+            ) : null}
             <div className="grid gap-2">
               <button
                 className="secondary-button w-full disabled:opacity-50"

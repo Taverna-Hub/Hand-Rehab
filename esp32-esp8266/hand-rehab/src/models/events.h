@@ -28,8 +28,13 @@ struct ButtonSample {
 
 struct PressureSample {
   long pressure_raw;
+  long pressure_delta_raw;
+  long pressure_baseline_raw;
+  uint32_t pressure_hit_threshold_raw;
+  uint32_t pressure_release_threshold_raw;
   float pressure_kpa;
   bool has_pressure_kpa;
+  bool pressure_calibrated;
   uint32_t timestamp_ms;
   uint32_t sequence;
 };

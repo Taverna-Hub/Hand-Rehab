@@ -68,6 +68,29 @@ Ao receber `end_session`, a ESP32 faz flush dos buffers, publica `event_type="se
 }
 ```
 
+## Payload realtime de pressao
+
+`pressure_delta_raw` e `pressure_kpa` so devem ser tratados como input de jogo quando `pressure_calibrated` for `true` ou quando o frontend ja tiver recebido uma baseline por `calibration_completed`.
+
+```json
+{
+  "device_id": "esp32-001",
+  "session_id": "00000000-0000-0000-0000-000000000000",
+  "user_id": "00000000-0000-0000-0000-000000000000",
+  "hand": "right",
+  "mode": "pressure",
+  "pressure_raw": 23100,
+  "pressure_delta_raw": 900,
+  "pressure_baseline_raw": 22200,
+  "pressure_calibrated": true,
+  "pressure_hit_threshold_raw": 700,
+  "pressure_release_threshold_raw": 350,
+  "pressure_kpa": 0.09,
+  "timestamp_ms": 123456,
+  "sequence": 2
+}
+```
+
 ## Payload batch de pressao
 
 ```json

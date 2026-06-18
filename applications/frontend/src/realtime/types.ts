@@ -29,7 +29,12 @@ export interface RealtimePressureEvent extends RealtimeBaseEvent {
   mode: "pressure";
   realtime_type?: "pressure";
   pressure_raw: number;
+  pressure_baseline_raw?: number;
+  pressure_calibrated?: boolean;
+  pressure_delta_raw?: number;
+  pressure_hit_threshold_raw?: number;
   pressure_kpa?: number | null;
+  pressure_release_threshold_raw?: number;
 }
 
 export interface RealtimeSessionEvent {
@@ -43,6 +48,10 @@ export interface RealtimeSessionEvent {
   event_type?: "session_started" | "session_finished" | string;
   status?: string;
   wifi_rssi?: number;
+  pressure_baseline_raw?: number;
+  pressure_hit_threshold_raw?: number;
+  pressure_noise_raw?: number;
+  pressure_release_threshold_raw?: number;
   source_topic?: string;
   node_red_received_at_ms?: number;
   error?: string;

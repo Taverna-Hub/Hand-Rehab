@@ -64,7 +64,7 @@ static const uint16_t MQTT_BUFFER_SIZE_BYTES = MQTT_MAX_PACKET_SIZE;
 
 static const uint32_t BUTTON_DEBOUNCE_MS = 50;
 static const uint32_t BUTTON_SCAN_INTERVAL_MS = 10;
-static const uint32_t PRESSURE_SAMPLE_INTERVAL_MS = 1000;
+static const uint32_t PRESSURE_SAMPLE_INTERVAL_MS = 100;
 static const uint32_t MQTT_LOOP_INTERVAL_MS = 10;
 static const uint16_t MQTT_SOCKET_TIMEOUT_SECONDS = 10;
 static const uint16_t MQTT_KEEP_ALIVE_SECONDS = 15;
@@ -73,6 +73,11 @@ static const uint32_t BATCH_PUBLISH_INTERVAL_MS = 5000;
 static const uint32_t STATUS_LED_BLINK_INTERVAL_MS = 500;
 static const uint32_t STATUS_LED_IDLE_POLL_INTERVAL_MS = 100;
 static const uint8_t PRESSURE_SAMPLE_COUNT = 3;
+static const uint8_t PRESSURE_CALIBRATION_SAMPLE_COUNT = 20;
+static const uint32_t PRESSURE_CALIBRATION_SAMPLE_DELAY_MS = 30;
+static const uint32_t PRESSURE_MIN_HIT_DELTA_RAW = 700;
+static const uint32_t PRESSURE_MIN_RELEASE_DELTA_RAW = 350;
+static const uint32_t PRESSURE_NOISE_MARGIN_RAW = 250;
 static const uint8_t HX710B_TOTAL_CLOCK_PULSES = 27;
 static const uint32_t HX710B_READY_TIMEOUT_MS = 250;
 
@@ -216,6 +221,11 @@ static bool buttonLastRawPressed[BUTTON_COUNT] = {false};
 static bool buttonStablePressed[BUTTON_COUNT] = {false};
 static bool buttonDownInSession[BUTTON_COUNT] = {false};
 static volatile bool benchmarkRunning = false;
+static long pressureBaselineRaw = PRESSURE_ZERO_OFFSET_RAW;
+static uint32_t pressureNoiseRaw = 0;
+static uint32_t pressureHitThresholdRaw = PRESSURE_MIN_HIT_DELTA_RAW;
+static uint32_t pressureReleaseThresholdRaw = PRESSURE_MIN_RELEASE_DELTA_RAW;
+static bool pressureCalibrationReady = PRESSURE_ZERO_OFFSET_RAW != 0L;
 
 static void copyText(char *destination, size_t destination_size, const char *source) {
   if (destination_size == 0) {
@@ -546,6 +556,41 @@ static bool enqueueSessionEvent(const char *eventName, const SessionState &sessi
   return publishCriticalMqtt(topic, payload, false);
 }
 
+static bool publishCalibrationStatus(const char *status, const char *errorMessage = nullptr) {
+  char topic[128];
+  char payload[512];
+  buildTopic(topic, sizeof(topic), "realtime/session");
+
+  if (strcmp(status, "calibration_completed") == 0) {
+    snprintf(payload, sizeof(payload),
+             "{\"device_id\":\"%s\",\"status\":\"%s\",\"timestamp_ms\":%lu,"
+             "\"pressure_baseline_raw\":%ld,\"pressure_noise_raw\":%lu,"
+             "\"pressure_hit_threshold_raw\":%lu,\"pressure_release_threshold_raw\":%lu}",
+             APP_DEVICE_ID,
+             status,
+             static_cast<unsigned long>(millis()),
+             pressureBaselineRaw,
+             static_cast<unsigned long>(pressureNoiseRaw),
+             static_cast<unsigned long>(pressureHitThresholdRaw),
+             static_cast<unsigned long>(pressureReleaseThresholdRaw));
+  } else if (errorMessage != nullptr && strlen(errorMessage) > 0) {
+    snprintf(payload, sizeof(payload),
+             "{\"device_id\":\"%s\",\"status\":\"%s\",\"timestamp_ms\":%lu,\"error\":\"%s\"}",
+             APP_DEVICE_ID,
+             status,
+             static_cast<unsigned long>(millis()),
+             errorMessage);
+  } else {
+    snprintf(payload, sizeof(payload),
+             "{\"device_id\":\"%s\",\"status\":\"%s\",\"timestamp_ms\":%lu}",
+             APP_DEVICE_ID,
+             status,
+             static_cast<unsigned long>(millis()));
+  }
+
+  return publishCriticalMqtt(topic, payload, false);
+}
+
 static bool waitForHx710b(uint32_t timeoutMs) {
   const uint32_t startedAt = millis();
 
@@ -670,31 +715,48 @@ static void publishRealtimeButton(const ButtonSample &sample, const SessionState
 
 static void publishRealtimePressure(const PressureSample &sample, const SessionState &session) {
   char topic[128];
-  char payload[384];
+  char payload[512];
   buildTopic(topic, sizeof(topic), "realtime/pressure");
+  const char *calibratedText = sample.pressure_calibrated ? "true" : "false";
   if (sample.has_pressure_kpa) {
     snprintf(payload, sizeof(payload),
              "{\"device_id\":\"%s\",\"session_id\":\"%s\",\"user_id\":\"%s\",\"hand\":\"%s\","
-             "\"mode\":\"pressure\",\"pressure_raw\":%ld,\"pressure_kpa\":%.3f,"
+             "\"mode\":\"pressure\",\"pressure_raw\":%ld,\"pressure_delta_raw\":%ld,"
+             "\"pressure_baseline_raw\":%ld,\"pressure_calibrated\":%s,"
+             "\"pressure_hit_threshold_raw\":%lu,\"pressure_release_threshold_raw\":%lu,"
+             "\"pressure_kpa\":%.3f,"
              "\"timestamp_ms\":%lu,\"sequence\":%lu}",
              APP_DEVICE_ID,
              session.session_id,
              session.user_id,
              session.hand,
              sample.pressure_raw,
+             sample.pressure_delta_raw,
+             sample.pressure_baseline_raw,
+             calibratedText,
+             static_cast<unsigned long>(sample.pressure_hit_threshold_raw),
+             static_cast<unsigned long>(sample.pressure_release_threshold_raw),
              sample.pressure_kpa,
              static_cast<unsigned long>(sample.timestamp_ms),
              static_cast<unsigned long>(sample.sequence));
   } else {
     snprintf(payload, sizeof(payload),
              "{\"device_id\":\"%s\",\"session_id\":\"%s\",\"user_id\":\"%s\",\"hand\":\"%s\","
-             "\"mode\":\"pressure\",\"pressure_raw\":%ld,\"pressure_kpa\":null,"
+             "\"mode\":\"pressure\",\"pressure_raw\":%ld,\"pressure_delta_raw\":%ld,"
+             "\"pressure_baseline_raw\":%ld,\"pressure_calibrated\":%s,"
+             "\"pressure_hit_threshold_raw\":%lu,\"pressure_release_threshold_raw\":%lu,"
+             "\"pressure_kpa\":null,"
              "\"timestamp_ms\":%lu,\"sequence\":%lu}",
              APP_DEVICE_ID,
              session.session_id,
              session.user_id,
              session.hand,
              sample.pressure_raw,
+             sample.pressure_delta_raw,
+             sample.pressure_baseline_raw,
+             calibratedText,
+             static_cast<unsigned long>(sample.pressure_hit_threshold_raw),
+             static_cast<unsigned long>(sample.pressure_release_threshold_raw),
              static_cast<unsigned long>(sample.timestamp_ms),
              static_cast<unsigned long>(sample.sequence));
   }
@@ -1046,6 +1108,8 @@ static void subscribeCommandTopics() {
   mqttClient.subscribe(topic);
   buildTopic(topic, sizeof(topic), "commands/end_session");
   mqttClient.subscribe(topic);
+  buildTopic(topic, sizeof(topic), "commands/calibrate");
+  mqttClient.subscribe(topic);
   buildTopic(topic, sizeof(topic), "commands/start_benchmark");
   mqttClient.subscribe(topic);
   buildTopic(topic, sizeof(topic), "commands/ping");
@@ -1194,6 +1258,79 @@ static void handleEndSessionCommand() {
   }
 }
 
+static void handleCalibratePressureCommand(byte *payload, unsigned int length) {
+  if (length > 0) {
+    JsonDocument doc;
+    const DeserializationError error = deserializeJson(doc, payload, length);
+    if (error) {
+      Serial.println("Comando calibrate invalido.");
+      publishCalibrationStatus("calibration_failed", "invalid_command");
+      return;
+    }
+  }
+
+  if (!isDeviceIdleForBenchmark()) {
+    Serial.println("Comando calibrate rejeitado: dispositivo ocupado.");
+    publishCalibrationStatus("calibration_rejected", "device_busy");
+    return;
+  }
+
+  publishCalibrationStatus("calibration_started");
+  resetHx710b();
+
+  int64_t sum = 0;
+  long minRaw = LONG_MAX;
+  long maxRaw = LONG_MIN;
+  uint8_t acceptedSamples = 0;
+
+  for (uint8_t i = 0; i < PRESSURE_CALIBRATION_SAMPLE_COUNT; i++) {
+    const long raw = readHx710bRaw();
+    if (raw == LONG_MIN) {
+      resetHx710b();
+      Serial.printf("Calibracao falhou: timeout na amostra %u\n", static_cast<unsigned>(i + 1));
+      publishCalibrationStatus("calibration_failed", "hx710b_timeout");
+      return;
+    }
+
+    sum += raw;
+    if (raw < minRaw) {
+      minRaw = raw;
+    }
+    if (raw > maxRaw) {
+      maxRaw = raw;
+    }
+    acceptedSamples++;
+    vTaskDelay(pdMS_TO_TICKS(PRESSURE_CALIBRATION_SAMPLE_DELAY_MS));
+  }
+
+  if (acceptedSamples == 0) {
+    publishCalibrationStatus("calibration_failed", "missing_samples");
+    return;
+  }
+
+  const long baselineRaw = static_cast<long>(sum / acceptedSamples);
+  const uint32_t noiseRaw = static_cast<uint32_t>(maxRaw - minRaw);
+  const uint32_t noiseBasedThreshold = noiseRaw + PRESSURE_NOISE_MARGIN_RAW;
+  const uint32_t hitThresholdRaw =
+      noiseBasedThreshold > PRESSURE_MIN_HIT_DELTA_RAW ? noiseBasedThreshold : PRESSURE_MIN_HIT_DELTA_RAW;
+  const uint32_t releaseThresholdRaw =
+      hitThresholdRaw / 2 > PRESSURE_MIN_RELEASE_DELTA_RAW ? hitThresholdRaw / 2 : PRESSURE_MIN_RELEASE_DELTA_RAW;
+
+  pressureBaselineRaw = baselineRaw;
+  pressureNoiseRaw = noiseRaw;
+  pressureHitThresholdRaw = hitThresholdRaw;
+  pressureReleaseThresholdRaw = releaseThresholdRaw;
+  pressureCalibrationReady = true;
+
+  Serial.printf("Calibracao concluida: baseline=%ld noise=%lu hit_delta=%lu release_delta=%lu samples=%u\n",
+                pressureBaselineRaw,
+                static_cast<unsigned long>(pressureNoiseRaw),
+                static_cast<unsigned long>(pressureHitThresholdRaw),
+                static_cast<unsigned long>(pressureReleaseThresholdRaw),
+                static_cast<unsigned>(acceptedSamples));
+  publishCalibrationStatus("calibration_completed");
+}
+
 static void handleStartBenchmarkCommand(byte *payload, unsigned int length) {
   JsonDocument doc;
   const DeserializationError error = deserializeJson(doc, payload, length);
@@ -1256,6 +1393,8 @@ static void mqttCallback(char *topic, byte *payload, unsigned int length) {
     handleStartSessionCommand(payload, length);
   } else if (topicEndsWith(topic, "/commands/end_session")) {
     handleEndSessionCommand();
+  } else if (topicEndsWith(topic, "/commands/calibrate")) {
+    handleCalibratePressureCommand(payload, length);
   } else if (topicEndsWith(topic, "/commands/start_benchmark")) {
     handleStartBenchmarkCommand(payload, length);
   } else if (topicEndsWith(topic, "/commands/ping")) {
@@ -1389,11 +1528,17 @@ static void taskPressure(void *parameter) {
         publishPressureTimeout(latestSession);
       } else {
         pressureTimeoutCount = 0;
-        const long netRaw = raw - PRESSURE_ZERO_OFFSET_RAW;
+        const long baselineRaw = pressureBaselineRaw;
+        const long netRaw = raw - baselineRaw;
         PressureSample sample = {
             raw,
+            netRaw,
+            baselineRaw,
+            pressureHitThresholdRaw,
+            pressureReleaseThresholdRaw,
             netRaw / RAW_COUNTS_PER_KPA,
-            true,
+            pressureCalibrationReady,
+            pressureCalibrationReady,
             millis(),
             ++pressureSequence,
         };
